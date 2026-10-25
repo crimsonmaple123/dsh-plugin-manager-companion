@@ -2,10 +2,23 @@
  * 本插件的配置面。
  *
  * 归属：A 类·重写（新代码；旧仓库把配置散在 profile 文件与 market 缓存里）。
- * 官方复用：ctx.settings（SettingsProvider）—— 注册一个命名空间，由官方负责
- *   校验、落盘、修订号与观察。
- * 前提检查：用户明确要求"无需手动编辑配置文件"。官方 settings 服务正是这条
- *   要求的原生实现；自己写 YAML 既违背要求也与官方并发写同一文件。
+ * 官方复用：Cordis 的插件 `Config` + 官方 `ctx.settings`（0.2.1 起是 `SettingsForms`）。
+ *
+ * ## 0.2.1 的配置模型（与 0.1.6 的根本差别）
+ *
+ * 0.1.6 的 `ctx.settings` 是「按命名空间注册 schema」的 `SettingsProvider`：
+ * 插件在 apply 里 `register(ns, schema)` 拿一个 scope。
+ * 0.2.1 起配置就是**插件自己的 `Config`**：Loader 行按 `id` 认领配置，官方把
+ * 每一行的 schema 投影成表单，写入走 `settings.update(entryId, patch)`。
+ * 所以本模块不再注册命名空间，只做三件事：
+ *   1. 导出 `Config`（供 Loader 校验与官方表单渲染）；
+ *   2. 把 volatile 引用归一成 `CompanionConfig`（缺字段回落默认值）；
+ *   3. 提供 `ConfigHandle` 门面（读 / 观察 / 写），写失败绝不静默。
+ *
+ * `SETTINGS_NAMESPACE` 仍然存在，但语义已收窄为**客户端字典命名空间**：
+ * 0.2.1 的 `settings.describe()` 返回的 `ns` 是 `entry.options.id`（Loader 行 id），
+ * 客户端的 `configForms.get(id)` 也用它。两者不是同一个字符串，所以本文件导出两个
+ * 常量（{@link SETTINGS_NAMESPACE} 与 {@link SETTINGS_ENTRY_ID}），改名时两处都要看。
  *
  * 配置只描述**本插件自己的行为**，绝不描述环境状态：环境状态是事实，读出来
  * 即可，不该由用户配置。
@@ -14,8 +27,22 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
-/** 本插件在官方 settings 里的命名空间（小写连字符，官方校验）。 */
+/**
+ * 本插件在客户端字典里的命名空间。
+ *
+ * 0.2.1 起它**只**是 `ctx.locale.register` 的键，与配置寻址无关（旧版把它同时
+ * 当作 settings 命名空间，那套 API 已不存在）。
+ */
 export const SETTINGS_NAMESPACE = 'plugin-manager-companion'
+
+/**
+ * 本插件的配置条目 id（= Loader 行 id = 包名）。
+ *
+ * 0.2.1 的 `settings.describe()` 用 `entry.options.id` 作为 `ns`，
+ * 客户端 `configForms.get(entryId)` 也用它；`cordis.patch.yml` 的行 id 与包名
+ * 一致，因此这里必须是包名，而不是字典命名空间。
+ */
+export const SETTINGS_ENTRY_ID = 'dsh-plugin-manager-companion-cmaple'
 
 /**
  * 诊断深度。用户要求"最大化利用能力，但同时保证不出错"，所以深度是**可选**的：
@@ -273,10 +300,31 @@ export const TRIAL_DISCLOSURE: TrialDisclosure = {
 }
 
 /**
- * 官方 settings 的 schema。
+ * 插件配置的 schema（0.2.1 的插件 `Config`）。
  *
  * `.default()` 逐项给出，使旧配置文件在新增字段后仍能解析；未知字段由
  * schemastery 丢弃，不会因为未来删字段而炸掉整份配置。
+ *
+ * ## 为什么根节点是 `.volatile()`
+ *
+ * 0.2.1 起配置的**写路径**是官方 `settings.update(entryId, patch)` →
+ * `configEditor.edit()` → `reconcileProfilePatches()`。该路径只对
+ * **volatile 字段**做增量热更新（Loader 的 `_commitVolatile` 会把新值写进
+ * 正在运行的引用而不重挂载插件）；非 volatile 的配置变更会走 `restart()`，
+ * 也就是**卸载再装配整个插件**。
+ *
+ * 本插件的配置会被路由、agent 工具、诊断、市场、升级引擎长期持有（`ConfigHandle`
+ * 在装配期建立、模块级缓存也按它算），重挂载会中断正在跑的 job 并让句柄指向旧实例。
+ * 因此整份配置声明为 volatile：官方把变更提交进 `Volatile` 引用，我们通过
+ * `ctx.on('loader/volatile-update')` 观察并重新发布快照，插件本身不重挂载。
+ *
+ * 代价与事实边界（必须知道，别把它当"可热改一切"）：
+ *   · volatile 只保证**引用内**的值被更新；已经算好的派生结果（如缓存键、已注册的
+ *     工具描述）不会自动重算——这些在本插件里都在调用点按当前配置现算，因此成立；
+ *   · 官方 `volatileForm()` 对根 volatile 的投影是**整份** schema（`plainSchema`），
+ *     所以设置页看到的字段与这里逐字一致；
+ *   · 测试与 CLI 直接调用 `ConfigSchema(...)` 时拿到的是 `Volatile` 引用（有 `.get()`），
+ *     归一入口是 {@link resolveConfigValue}。
  */
 export const ConfigSchema = z.object({
   diagnostics: z.object({
@@ -321,7 +369,51 @@ export const ConfigSchema = z.object({
     interval: z.union([z.const('session'), z.const('6h'), z.const('daily'), z.const('manual')]).default('daily'),
     registryUrl: z.string().default(''),
   }).default({ ...DEFAULT_UPGRADE_CONFIG }),
-})
+}).volatile()
+
+/**
+ * 从官方配置值里取纯数据。
+ *
+ * 0.2.1 的 volatile 配置在运行期是一个 `Volatile<T>` 引用（`get()` 给不可变快照），
+ * 而不是裸对象；非 volatile 的旧形态、以及测试里手工拼的字面量仍是裸对象。
+ * 两个形态都要接受——否则任何一处读配置都会在其中一个形态上拿到 undefined。
+ *
+ * @param value - Loader 解析后的配置值，或任意配置片段。
+ * @returns 纯数据对象；无法识别时 undefined。
+ */
+export function resolveConfigValue<T>(value: unknown): T | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const candidate = value as { get?: unknown }
+  if (typeof candidate.get === 'function') {
+    const snapshot = (candidate.get as () => unknown)()
+    return snapshot === null || typeof snapshot !== 'object' ? undefined : snapshot as T
+  }
+  return value as T
+}
+
+/**
+ * 把任意来源的配置补齐成完整形态。
+ *
+ * 三道来源都要过这里：Loader 的 volatile 引用、CLI 直接构造的字面量、以及
+ * 测试替身。缺字段一律回落默认值（`effectiveTrialConfig` 那条纪律的推广）。
+ *
+ * @param value - 任意配置值。
+ * @returns 完整配置。
+ */
+export function normalizeConfig(value: unknown): CompanionConfig {
+  const raw = resolveConfigValue<Partial<CompanionConfig>>(value) ?? {}
+  return {
+    diagnostics: { ...DEFAULT_CONFIG.diagnostics, ...(raw.diagnostics ?? {}) },
+    qualityGate: {
+      ...DEFAULT_CONFIG.qualityGate,
+      ...(raw.qualityGate ?? {}),
+      allowlist: [...(raw.qualityGate?.allowlist ?? DEFAULT_CONFIG.qualityGate.allowlist)],
+    },
+    marketplace: { ...DEFAULT_CONFIG.marketplace, ...(raw.marketplace ?? {}) },
+    trial: effectiveTrialConfig(raw),
+    upgrade: effectiveUpgradeConfig(raw),
+  }
+}
 
 /**
  * 读试装配置：缺字段、字段类型不对、越界一律回落到默认值。
@@ -416,7 +508,7 @@ export interface ConfigState {
   /** 配置是否可以写入（false = 正在用只读的默认配置）。 */
   readonly writable: boolean
   /** 不可写的稳定原因码；可写时为 null。 */
-  readonly reason: 'settings-missing' | 'namespace-conflict' | null
+  readonly reason: 'settings-missing' | 'no-profile-entry' | 'settings-read-only' | null
   /** 面向用户的一句话；可写时为 null。 */
   readonly detail: string | null
 }
@@ -427,9 +519,9 @@ let lastConfigDegradation: { readonly reason: ConfigState['reason']; readonly de
 /**
  * 配置面的当前状态。
  *
- * 为什么是模块级：装配层用 ctx.inject(['settings'], …) 在 settings 就绪时才注册，
- * 命名空间冲突发生在那个回调里；而这件事实必须能被 probeOfficialCapabilities 读到、
- * 进而出现在用户可见的 capabilities 里（不能只在日志里）。
+ * 为什么是模块级：装配层用 `ctx.inject(['settings'], …)` 在 settings 就绪时才绑定
+ * 句柄；而这件事实必须能被 probeOfficialCapabilities 读到、进而出现在用户可见的
+ * capabilities 里（不能只在日志里）。
  *
  * @returns 当前配置面状态。
  */
@@ -477,43 +569,113 @@ export function fallbackConfigHandle(): ConfigHandle {
 }
 
 /**
- * 注册本插件的 settings 命名空间。
+ * 官方 `SettingsForms` 服务里我们用到的那一面（结构式，不 import 官方类）。
  *
- * 官方 `register` 在命名空间已被占用时**抛错**。这里的立场是"任何宿主都能加载、
- * 缺能力就如实降级"：冲突时退回只读的默认配置句柄，并把事实登记给 capabilities，
- * 而不是让整个插件装配失败（那会让用户看到一个装不上、也没有可读原因的插件）。
+ * 0.2.1 的 `ctx.settings` 是 `SettingsForms`：`describe()` 列条目、`update(entryId, patch)`
+ * 合并写入、`get(entryId)` 给客户端表单。服务是 peer 包的一部分，小版本可能增减方法，
+ * 因此这里只声明实际调用的成员，并在运行时逐个校验。
+ */
+export interface SettingsFormsLike {
+  describe(options?: { readonly redactSecrets?: boolean }): readonly {
+    readonly ns: string
+    readonly value: unknown
+    readonly writable?: boolean
+  }[]
+  update(ns: string, patch: object, expectedRevision?: number): Promise<void>
+}
+
+/**
+ * 绑定本插件的配置句柄。
  *
- * 不静默：降级句柄的 `update` 照旧**抛错**而不是丢写入，且 configState() 会让
- * capabilities.missing 里出现一条"配置不可写"的说明。
+ * 0.2.1 不再"注册命名空间"：配置就是本插件 Loader 行的 `Config`，由官方
+ * `SettingsForms` 按行 id 暴露与写入。因此这里做的是**绑定**：
+ *   · 读：优先用 Loader 交进来的运行期配置（`apply(ctx, config)` 的第二个参数，
+ *     volatile 引用；`loader/volatile-update` 提交后同一个引用里就是新值）；
+ *     没拿到时退回官方 `describe()` 里本行 id 的 `value`；
+ *   · 写：官方 `update(entryId, patch)`（校验、落盘、volatile 提交都归官方）；
+ *   · 观察：`loader/volatile-update`（volatile 值已提交、插件未重挂载）与
+ *     `settings/document-updated`（外部编辑）。
+ *
+ * 三种"不可写"都要如实登记，且都不抛穿装配（否则用户看到的是一个装不上的插件）：
+ *   · settings 服务缺失（非 profile 启动的宿主）；
+ *   · 本插件不是 profile 行（没有 entry id / describe 里没有本行）；
+ *   · 官方报告文档只读。
  *
  * @param ctx - 本插件的 host 上下文。
- * @returns 配置句柄；settings 不可用或命名空间冲突时返回只读的默认配置句柄。
+ * @param runtimeConfig - Loader 解析后的配置值（volatile 引用或裸对象）；省略时从 describe() 读。
+ * @returns 配置句柄；不可写时返回只读的默认配置句柄，并把原因留给 capabilities。
  */
-export function registerConfig(ctx: Context): ConfigHandle {
-  const settings = ctx.get('settings')
-  if (settings === undefined) {
+export function registerConfig(ctx: Context, runtimeConfig?: unknown): ConfigHandle {
+  const settings = ctx.get('settings') as SettingsFormsLike | undefined
+  if (settings === undefined || typeof settings.describe !== 'function' || typeof settings.update !== 'function') {
     noteConfigDegraded(ctx, 'settings-missing',
-      'settings 服务未就绪，配置降级为只读——装配层应改用 ctx.inject(["settings"])')
-    return fallbackConfigHandle()
+      'settings 服务未就绪（0.2.1 需要 @deepseek-ai/dsh-settings 的 SettingsForms），配置降级为只读')
+    return { ...fallbackConfigHandle(), current: () => normalizeConfig(runtimeConfig) }
   }
-  let scope: ReturnType<typeof settings.register>
-  try {
-    scope = settings.register(SETTINGS_NAMESPACE, ConfigSchema)
-  } catch (error) {
-    // 命名空间已被占用（同进程内另一个本插件实例）：不抛穿装配，退回只读句柄并登记事实。
-    noteConfigDegraded(ctx, 'namespace-conflict',
-      'settings 命名空间 "' + SETTINGS_NAMESPACE + '" 已被占用，配置降级为只读（正在用默认值）：'
-      + messageOf(error))
-    return fallbackConfigHandle()
+  /** 本行 id：Loader 行 id 就是官方表单的 `ns`；没经 Loader 时退回包名。 */
+  const entryId = entryIdOf(ctx) ?? SETTINGS_ENTRY_ID
+  const read = (): CompanionConfig => {
+    if (runtimeConfig !== undefined) return normalizeConfig(runtimeConfig)
+    let descriptors: ReturnType<SettingsFormsLike['describe']>
+    try {
+      descriptors = settings.describe()
+    } catch (error) {
+      noteConfigDegraded(ctx, 'settings-read-only', '读配置表单失败：' + messageOf(error))
+      return DEFAULT_CONFIG
+    }
+    const own = descriptors.find(descriptor => descriptor.ns === entryId)
+    if (own === undefined) {
+      noteConfigDegraded(ctx, 'no-profile-entry',
+        '当前 profile 的组合里没有本插件的配置行（id "' + entryId + '"）：'
+        + '配置只在以 profile 方式启动、且本插件作为 Loader 行装配时可用')
+      return DEFAULT_CONFIG
+    }
+    if (own.writable === false) {
+      noteConfigDegraded(ctx, 'settings-read-only', '官方配置文档当前只读，配置降级为默认值')
+    } else {
+      lastConfigDegradation = null
+    }
+    return normalizeConfig(own.value)
   }
-  // 注册成功：清掉可能残留的降级事实（例如重试装配）。
-  lastConfigDegradation = null
+  // 首次读一次：把"行不存在 / 只读"这类事实在装配期就登记给 capabilities。
+  const initial = read()
+  // 降级时**必须**给只读句柄：能读（甚至能读到宿主里的真实值）不等于能写。
+  // 若在这里返回一个"能写"的句柄，写入会打到官方 update 上并被它拒绝——但那是一个
+  // 迟到的、不可解释的失败；用户改完配置看到的是"保存失败"，而不是"这里不可写"。
+  if (!configState().writable) {
+    return { ...fallbackConfigHandle(), current: () => initial }
+  }
   return {
-    current: () => scope.get() as CompanionConfig,
-    watch: (listener) => scope.watch((next: unknown) => { listener(next as CompanionConfig) }),
+    current: read,
+    watch: (listener) => {
+      // `loader/volatile-update` 是 0.2.1 的 Loader 事件（值已提交、插件未重挂载）。
+      const offVolatile = ctx.on('loader/volatile-update', () => { listener(read()) })
+      // `settings/document-updated` 由官方 dsh-settings 声明（客户端合并的 Cordis Events）；
+      // 本包的编译面只含 dsh-tools/inventory 等 peer，未必拉到那条声明，因此用结构式注册。
+      const onAny = ctx.on as unknown as (name: string, listener: (...args: unknown[]) => void) => () => void
+      const offDocument = onAny('settings/document-updated', (ns: unknown) => {
+        if (ns === entryId) listener(read())
+      })
+      return () => { offVolatile(); offDocument() }
+    },
     update: async (patch) => {
-      await scope.update(patch as object)
-      return scope.get() as CompanionConfig
+      await settings.update(entryId, patch as object)
+      return read()
     },
   }
+}
+
+/**
+ * 取本插件 Loader 行的 id（`ctx.fiber.entry.options.id`）。
+ *
+ * 与官方 `PluginManager` 同一口径：它用 `ctx.fiber.entry?.options.id` 认领自己的配置行。
+ * 不经 Loader 装配时（单测直接调 apply）没有 entry，返回 undefined。
+ *
+ * @param ctx - host 上下文。
+ * @returns 行 id；取不到时 undefined。
+ */
+function entryIdOf(ctx: Context): string | undefined {
+  const entry = (ctx as unknown as { fiber?: { entry?: { options?: { id?: unknown } } } }).fiber?.entry
+  const id = entry?.options?.id
+  return typeof id === 'string' && id.length > 0 ? id : undefined
 }

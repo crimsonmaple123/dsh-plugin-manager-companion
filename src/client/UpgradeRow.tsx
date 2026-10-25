@@ -47,7 +47,7 @@ export type UpgradeRowActions = Pick<
  * 与 src/paths.ts 的 OUR_PACKAGE_NAME 同一个字面量。刻意不 import 那个模块：
  * 它是 host 模块（值会拉进整套 host 代码），客户端只认这个字符串。
  */
-const OUR_PACKAGE = 'dsh-plugin-manager-companion'
+const OUR_PACKAGE = 'dsh-plugin-manager-companion-cmaple'
 
 /**
  * 注册项交给本组件的完整 props。

@@ -175,7 +175,7 @@ function build(planted) {
   // （实测）。改为手工建 profile 自己的 node_modules 链接——这也是"link 安装"的真实落盘形态。
   const modulesDir = join(profileDir, 'node_modules')
   mkdirSync(modulesDir, { recursive: true })
-  const pluginLink = join(modulesDir, 'dsh-plugin-manager-companion')
+  const pluginLink = join(modulesDir, 'dsh-plugin-manager-companion-cmaple')
   if (!existsSync(pluginLink)) symlinkSync(join(repoRoot, '.'), pluginLink, 'dir')
 }
 

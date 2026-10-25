@@ -10,8 +10,9 @@ import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { readFileSync, symlinkSync } from 'node:fs'
+import { symlinkSupport, testWhen } from './platform-support.mjs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import {
   analyzeEnvironment, installAnchorRoots, installedPackageDir, isPlausibleSpecifier, scanCode, specifierResolves,
   tokenize, locatePatchRows,
@@ -33,6 +34,8 @@ let bootBlocking
 let noiseDir
 /** 兜底目录三类文案的 fixture（task-105：让 module-fallback 文案真的进入护栏的检查集合）。 */
 let fallbackDir
+/** 符号链接能力（夹具就是链接；不可用时跳过依赖它的那条用例）。 */
+let fallbackLinks
 
 /** reverse profile 的 patch 里某片段的行号（1 起）。 */
 function reversePatchLine(needle) {
@@ -198,18 +201,26 @@ before(async () => {
   })
   await writeText(join(fallbackDir, 'cordis.patch.yml'), '- insert:\n')
   // 共享层（profiles/node_modules）就是上面写好的那个（cordis 在里面）。
-  // ① 断链：指向一个不存在的目标。
-  symlinkSync(join(profiles, 'node_modules', 'no-such-target-dangling'),
-    join(profiles, 'node_modules', 'dangling-pkg'))
-  // ② 过时：目标存在（真目录），但包名不在当前安装闭包里 -> 进 stale。
-  await writeJson(join(profiles, 'node_modules', 'stale-pkg', 'package.json'),
-    { name: 'stale-pkg', version: '1.0.0' })
-  symlinkSync(join(profiles, 'node_modules', 'stale-pkg'),
-    join(profiles, 'node_modules', 'stale-link'))
-  // ③ 私有层断链（<profile>/.dsh-module-fallback/node_modules）。
-  const privateFallback = join(fallbackDir, '.dsh-module-fallback', 'node_modules')
-  await mkdir(privateFallback, { recursive: true })
-  symlinkSync(join(fallbackDir, 'node_modules', 'react'), join(privateFallback, 'react'))
+  //
+  // 三段 fixture 都以**符号链接**为被测对象。Windows 普通用户默认没有建链接的特权
+  // （实测 fs.symlinkSync 报 EPERM、mklink 报"权限不足"）：这时如实跳过依赖它的
+  // 那一条用例，绝不改用 junction 冒充（junction 的 lstat().isSymbolicLink() 为 false，
+  // 拿它当链接会让断言在错误前提下变绿）。
+  fallbackLinks = symlinkSupport()
+  if (fallbackLinks.ok) {
+    // ① 断链：指向一个不存在的目标。
+    symlinkSync(join(profiles, 'node_modules', 'no-such-target-dangling'),
+      join(profiles, 'node_modules', 'dangling-pkg'))
+    // ② 过时：目标存在（真目录），但包名不在当前安装闭包里 -> 进 stale。
+    await writeJson(join(profiles, 'node_modules', 'stale-pkg', 'package.json'),
+      { name: 'stale-pkg', version: '1.0.0' })
+    symlinkSync(join(profiles, 'node_modules', 'stale-pkg'),
+      join(profiles, 'node_modules', 'stale-link'))
+    // ③ 私有层断链（<profile>/.dsh-module-fallback/node_modules）。
+    const privateFallback = join(fallbackDir, '.dsh-module-fallback', 'node_modules')
+    await mkdir(privateFallback, { recursive: true })
+    symlinkSync(join(fallbackDir, 'node_modules', 'react'), join(privateFallback, 'react'))
+  }
 
   // 安装锚点：官方包与 bundle 本体由**安装侧**提供，profile 的 node_modules 里没有它们。
   // 只有把它纳入解析根，这些行才不会被判成孤儿（实测干净环境 163 条 orphan-row 全是这么来的）。
@@ -303,9 +314,9 @@ before(async () => {
   await writeText(join(bootBlocking['boot-dup'], 'cordis.patch.yml'), [
     '- insert:',
     '    - id: boot-dup-row',
-    "      name: 'dsh-plugin-manager-companion'",
+    "      name: 'dsh-plugin-manager-companion-cmaple'",
     '    - id: boot-dup-row',
-    "      name: 'dsh-plugin-manager-companion'",
+    "      name: 'dsh-plugin-manager-companion-cmaple'",
     '',
   ].join('\n'))
   await writeText(join(bootBlocking['boot-orphan'], 'cordis.patch.yml'), [
@@ -885,8 +896,8 @@ describe('diagnostics · 启动阻断根因（一等公民）', () => {
     const mutatedIssues = report.issues.filter(item => item.code !== 'unresolvable-bundle')
     assert.throws(() => assert.ok(mutatedIssues.find(item => item.code === 'unresolvable-bundle'), '必须产出一条 issue'),
       '去掉解析后断言必须失败——否则这条事实又只剩 skip.reason 里那段长文本')
-    const skip = report.skipped.find(item => item.check === 'composition-official')
-    assert.ok(skip, '旧通道（skip）仍在，只是不再是唯一身份')
+    const skip = report.skipped.find(item => String(item.reason).includes('cannot resolve profile bundle'))
+    assert.ok(skip, '旧通道（skip）仍在，只是不再是唯一身份：' + JSON.stringify(report.skipped.map(item => item.check)))
     assert.ok(skip.reason.includes('cannot resolve profile bundle'), '原始异常文本照样保留在 reason 里')
   })
 
@@ -958,7 +969,9 @@ describe('diagnostics · patch 归属判定是平台无关的（task-59）', () 
   function oldIsInsidePrefix(base, candidate) {
     const b = resolve(base)
     const t = resolve(candidate)
-    return t === b || t.startsWith(b + '/')
+    // 分隔符按平台取：Windows 上是反斜杠，写死 '/' 会让这条判据在 Windows 上恒假——
+    // 那不是"旧口径判错"，而是夹具本身写错了平台假设。
+    return t === b || t.startsWith(b + sep)
   }
 
   it('环境自己的 patch：环境目录大小写不同（大小写不敏感平台）仍判成 profile-patch', async () => {
@@ -1026,7 +1039,11 @@ describe('diagnostics · 文案不留未渲染的 Markdown（task-55）', () => 
     }
   })
 
-  it('护栏覆盖：兜底目录三类文案都真的进入了检查集合（task-105）', async () => {
+  it('护栏覆盖：兜底目录三类文案都真的进入了检查集合（task-105）', async (t) => {
+    if (!fallbackLinks.ok) {
+      t.skip(fallbackLinks.reason + '（本条依赖断链 / 过时链接 fixture）')
+      return
+    }
     // 这条是 0.1.2 漏网的直接补救：原护栏只在 brokenDir 上跑，那份 fixture 不产出任何
     // module-fallback 发现，于是三条新文案从未被检查（字面星号因此发到 npm）。
     // 判据分两步：① 三类 issue 真的产出；② 它们的文案里不含未渲染的星号。

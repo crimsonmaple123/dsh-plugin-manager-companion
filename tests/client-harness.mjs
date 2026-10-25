@@ -35,7 +35,7 @@ export const PLATFORM = [
 ]
 
 /** 本包在模块表里的 id。 */
-export const PACKAGE_ID = 'dsh-plugin-manager-companion'
+export const PACKAGE_ID = 'dsh-plugin-manager-companion-cmaple'
 
 /** 本插件在客户端 locale 注册表里的命名空间。 */
 export const NS = 'plugin-manager-companion'
@@ -245,16 +245,6 @@ export function applyWithMocks(exported, settings = {}) {
    * 先建对象再调用 apply（而不是字面量直接当参数）：产物里出现了 `ctx.inject(...)` 的用法，
    * 而那个作用域桩件要把**同一份 ctx** 回调出去（服务可见性靠注入声明，真机同理）。
    */
-  const scopeSnapshot = {
-    status: settings.status ?? 'ready',
-    value: settings.value,
-    base: undefined,
-    user: undefined,
-    revision: 1,
-    writable: settings.writable ?? true,
-    mode: 'host',
-    namespace: NS,
-  }
   const ctx = {}
   ctx.effect = (fn) => { effects.push(fn); const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} }
   ctx.on = () => () => {}
@@ -274,20 +264,31 @@ export function applyWithMocks(exported, settings = {}) {
     subscribe: () => () => {},
   }
   ctx.remote = { pluginManager: {}, pluginInventory: {}, $on: () => () => {}, $mount: async () => () => {} }
-  // 官方配置通道：客户端经它读写本插件的 settings 命名空间（不碰配置文件）。
-  // 桩件按**客户端** SettingsScope 契约：getSnapshot / subscribe / mutate / set / unset。
-  ctx.settingsScope = {
-    bind() {
+  // 官方配置通道（0.2.1）：客户端经 `ctx.configForms.get(entryId)` 拿本插件条目的表单。
+  // 桩件按**客户端 ConfigForm 契约**：getSnapshot / subscribe / mutate / set / unset。
+  // 旧版的 `settingsScope.bind({ namespace })` 已随 SettingsProvider 移除。
+  const formSnapshot = {
+    status: settings.status ?? 'ready',
+    value: settings.value,
+    base: undefined,
+    user: undefined,
+    revision: 1,
+    writable: settings.writable ?? true,
+  }
+  ctx.configForms = {
+    get(entryId) {
+      if (settings.entryId !== undefined) assert.equal(entryId, settings.entryId, 'configForms.get 必须用 profile 条目 id')
       const listeners = new Set()
       return {
-        getSnapshot: () => scopeSnapshot,
+        getSnapshot: () => formSnapshot,
         subscribe(fn) { listeners.add(fn); return () => { listeners.delete(fn) } },
-        mutate: async () => {},
-        set: async () => {},
-        unset: async () => {},
+        mutate: async () => true,
+        set: async () => true,
+        unset: async () => true,
       }
     },
-    describe: () => ({ subscribe: () => () => {}, getSnapshot: () => ({ descriptors: [] }) }),
+    describe: () => ({ subscribe: () => () => {}, getSnapshot: () => ({ namespaces: [] }) }),
+    whileServed: () => () => {},
   }
   /**
    * `ctx.inject` 的作用域桩件（与真机同形：声明服务后回调拿到作用域内的 ctx）。
@@ -302,7 +303,7 @@ export function applyWithMocks(exported, settings = {}) {
     return () => {}
   }
   exported.apply(ctx)
-  return { slotRegistrations, injected, dicts, effects, scopeSnapshot }
+  return { slotRegistrations, injected, dicts, effects, formSnapshot }
 }
 
 /** 从字典数组里取一条文案（strict 时缺键即抛）。 */

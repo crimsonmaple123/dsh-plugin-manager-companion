@@ -177,37 +177,57 @@ describe('task-40 · manifest 读不懂 ≠ 没有值（按字段表达）', () 
   })
 })
 
-describe('task-40 · settings 命名空间冲突不抛穿装配', () => {
-  it('register 抛"已注册"时：不失败、拿到只读降级句柄、且事实对用户可见', async () => {
-    const settings = {
-      register() { throw new Error('namespace "plugin-manager-companion" already registered') },
+describe('task-40 · 配置面不可写时不抛穿装配（0.2.1 的 SettingsForms 口径）', () => {
+  /**
+   * 0.2.1 的配置寻址：`settings.describe()` 列条目（`ns` = Loader 行 id），
+   * 写入走 `settings.update(ns, patch)`。旧版的 `settings.register(ns, schema)`
+   * 已随 SettingsProvider 移除，因此本组用例整体改成新契约。
+   */
+  const forms = (value, options = {}) => {
+    const calls = []
+    return {
+      calls,
+      describe: () => options.describe ?? [{ ns: 'dsh-plugin-manager-companion-cmaple', value, writable: options.writable ?? true }],
+      update: async (ns, patch) => { calls.push({ ns, patch }) },
     }
-    const ctx = ctxOf({ settings })
+  }
+
+  it('行不在 describe 里：不失败、拿到只读降级句柄、且事实对用户可见', async () => {
+    const ctx = ctxOf({ settings: forms(undefined, { describe: [] }) })
     const handle = registerConfig(ctx)
     assert.equal(configState().writable, false)
-    assert.equal(configState().reason, 'namespace-conflict', '要给出稳定原因码')
-    assert.match(String(configState().detail), /已被占用/);
+    assert.equal(configState().reason, 'no-profile-entry', '要给出稳定原因码')
+    assert.match(String(configState().detail), /没有本插件的配置行/)
     assert.equal((await handle.current()).qualityGate.mode, 'block', '降级句柄给默认配置')
     await assert.rejects(() => handle.update({ qualityGate: { enabled: true, mode: 'warn', allowlist: [] } }),
-      /尚未就绪|被拒绝/, '降级句柄的写入必须抛错，不能静默丢');
+      /尚未就绪|被拒绝/, '降级句柄的写入必须抛错，不能静默丢')
     const capabilities = probeOfficialCapabilities(ctx)
     assert.ok(capabilities.missing.some((reason) => reason.includes('配置不可写')),
       '要在 capabilities.missing 里看得见：' + JSON.stringify(capabilities.missing))
   })
 
-  it('反向用例：注册成功时不降级、也不出现"配置不可写"', async () => {
-    const scope = {
-      get: () => ({ qualityGate: { enabled: true, mode: 'warn', allowlist: [] } }),
-      watch: () => () => {},
-      update: async () => {},
-    }
-    const settings = { register: () => scope }
+  it('官方文档只读：同样降级，原因码是 settings-read-only', () => {
+    const ctx = ctxOf({ settings: forms({ qualityGate: { enabled: true, mode: 'warn', allowlist: [] } }, { writable: false }) })
+    const handle = registerConfig(ctx)
+    assert.equal(configState().writable, false)
+    assert.equal(configState().reason, 'settings-read-only')
+    // 只读时仍然如实回读宿主值（不是静默换成默认值）。
+    assert.equal(handle.current().qualityGate.mode, 'warn')
+  })
+
+  it('反向用例：行存在且可写时不降级、也不出现"配置不可写"', async () => {
+    const settings = forms({ qualityGate: { enabled: true, mode: 'warn', allowlist: [] } })
     const ctx = ctxOf({ settings })
     const handle = registerConfig(ctx)
-    assert.equal(configState().writable, true, '成功注册后必须清掉降级事实')
+    assert.equal(configState().writable, true, '绑定成功后必须清掉降级事实')
     assert.equal(configState().reason, null)
     assert.equal((await handle.current()).qualityGate.mode, 'warn')
     assert.equal(probeOfficialCapabilities(ctx).missing.some((reason) => reason.includes('配置不可写')), false)
+    // 写入必须打到官方通道，且用**行 id**寻址（不是旧命名空间）。
+    await handle.update({ qualityGate: { enabled: true, mode: 'block', allowlist: [] } })
+    assert.equal(settings.calls.length, 1)
+    assert.equal(settings.calls[0].ns, 'dsh-plugin-manager-companion-cmaple')
+    assert.equal(settings.calls[0].patch.qualityGate.mode, 'block')
   })
 
   it('反向用例：settings 缺失仍是同一形态（只读 + 可见原因）', () => {
@@ -218,19 +238,14 @@ describe('task-40 · settings 命名空间冲突不抛穿装配', () => {
     assert.equal(handle.current().qualityGate.mode, 'block')
   })
 
-  it('变异验证：让冲突照旧抛穿（旧行为）→ 断言必须报红', () => {
-    const settings = { register() { throw new Error('namespace "plugin-manager-companion" already registered') } }
-    // 旧行为就是这一行：冲突直接抛穿 apply（装配失败，用户看到一个装不上的插件）
-    assert.throws(() => settings.register(), /already registered/, '旧行为：冲突直接抛穿装配');
-    // 新行为：同一桩件经 registerConfig 不抛，且降级事实可见
-    const handle = registerConfig(ctxOf({ settings }));
-    assert.equal(handle.current().qualityGate.mode, 'block');
-    assert.equal(configState().reason, 'namespace-conflict');
-    // 变异：把注册换回"直接调 register"（旧行为）→ 这一步必然抛，证明降级真的在拦
-    assert.throws(() => {
-      const oldWay = (ctx) => ctx.get('settings').register('plugin-manager-companion', {});
-      oldWay(ctxOf({ settings }));
-    }, /already registered/, '退回旧行为后必须抛——这条钉子就是"别抛穿装配"');
+  it('变异验证：服务只有旧式 register（没有 update）→ 必须走降级而不是调用点 TypeError', async () => {
+    // 旧行为：`settings.register(...)` 直接调 —— 0.2.1 上那是 `undefined is not a function`，
+    // 抛在 apply 里就是"装不上的插件，且没有可读原因"。
+    const legacy = { register() { throw new Error('namespace already registered') } }
+    assert.throws(() => legacy.register('plugin-manager-companion', {}), /already registered/)
+    const handle = registerConfig(ctxOf({ settings: legacy }))
+    assert.equal(configState().reason, 'settings-missing')
+    assert.equal((await handle.current()).qualityGate.mode, 'block')
   })
 })
 

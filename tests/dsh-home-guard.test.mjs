@@ -15,7 +15,12 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { childProcessSupport, symlinkSupport, testWhen } from './platform-support.mjs'
 import { MISSING_TARGET_HOME, REAL_HOME_TARGET, resolveTargetDshHome, samePath } from '../tools/dsh-home-guard.mjs'
+
+/** 这些用例要真起子进程 / 真建符号链接；拿不到能力时如实跳过（不删用例、不伪造）。 */
+const testSpawn = testWhen(test, childProcessSupport())
+const testLink = testWhen(test, symlinkSupport())
 
 const REPO = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const SCRIPT = join(REPO, 'tools', 'dirty-profile.mjs')
@@ -53,7 +58,7 @@ test('守卫：DSH_HOME 可用，--dsh-home 优先于它', () => {
   assert.equal(fromFlag.dshHome, resolve('/tmp/some-flag-home'))
 })
 
-test('守卫：目标是真实 harness home（含等价写法与符号链接）→ 拒绝并点名路径', () => {
+testLink('守卫：目标是真实 harness home（含等价写法与符号链接）→ 拒绝并点名路径', () => {
   const realHome = tempHome()
   const realHarnessHome = join(realHome, '.dsh')
   mkdirSync(realHarnessHome, { recursive: true })
@@ -97,7 +102,7 @@ test('守卫：--allow-real-home 才放行真实 home；其它位置直接放行
   }
 })
 
-test('脚本：无参数运行必须拒绝，且不在真实家目录里建任何东西', () => {
+testSpawn('脚本：无参数运行必须拒绝，且不在真实家目录里建任何东西', () => {
   const realHome = tempHome()
   try {
     const result = runScript(realHome, ['--profile', 'guard-probe'])
@@ -109,7 +114,7 @@ test('脚本：无参数运行必须拒绝，且不在真实家目录里建任�
   }
 })
 
-test('脚本：显式指向真实 home → 拒绝且不创建目录', () => {
+testSpawn('脚本：显式指向真实 home → 拒绝且不创建目录', () => {
   const realHome = tempHome()
   try {
     const result = runScript(realHome, ['--dsh-home', join(realHome, '.dsh'), '--profile', 'guard-probe'])
@@ -122,7 +127,7 @@ test('脚本：显式指向真实 home → 拒绝且不创建目录', () => {
   }
 })
 
-test('脚本：给了临时 --dsh-home → 通过守卫并真的写到那个 home（源 profile 不存在，随后失败）', () => {
+testSpawn('脚本：给了临时 --dsh-home → 通过守卫并真的写到那个 home（源 profile 不存在，随后失败）', () => {
   const realHome = tempHome()
   const workHome = mkdtempSync(join(tmpdir(), 't72-work-'))
   try {

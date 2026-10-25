@@ -110,7 +110,7 @@ function secondCard(text) {
   const start = lines.findIndex(line => line.trim() === '@deepseek-ai/dsh-experimental-auto-review')
   if (start < 0) return ''
   const rest = lines.slice(start + 1)
-  const end = rest.findIndex(line => line.trim().startsWith('dsh-plugin-manager-companion') || line.trim() === '本插件自身')
+  const end = rest.findIndex(line => line.trim().startsWith('dsh-plugin-manager-companion-cmaple') || line.trim() === '本插件自身')
   return (end < 0 ? rest : rest.slice(0, end)).join(String.fromCharCode(10))
 }
 async function main() {

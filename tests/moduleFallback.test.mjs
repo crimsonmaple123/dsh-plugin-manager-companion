@@ -14,6 +14,14 @@ import assert from 'node:assert/strict'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { symlinkSupport, testWhen } from './platform-support.mjs'
+
+/**
+ * 这批用例的**夹具就是符号链接**（断链 / 过时 / 正常三分类、scope 目录、清理动作）。
+ * 平台造不出链接时如实跳过并写明原因——绝不改成 junction 之类的替身：junction 的
+ * `lstat().isSymbolicLink()` 为 false，用它冒充会让断言在错误的前提下变绿。
+ */
+const testLink = testWhen(test, symlinkSupport())
 
 const home = mkdtempSync(join(tmpdir(), 'pmc-fallback-'))
 const originalHome = process.env.DSH_HOME
@@ -66,7 +74,7 @@ const closureOf = (...names) => ({ ok: true, names: new Set(names) })
 
 // ── 1. 分类 ────────────────────────────────────────────────────────────────
 
-test('三分类判对：断链 / 完好但过时 / 正常，且 scope 包按 @scope/name 报出来', () => {
+testLink('三分类判对：断链 / 完好但过时 / 正常，且 scope 包按 @scope/name 报出来', () => {
   const dir = makeDir(home, 'classify', 'node_modules')
   const alive = makeDir(home, 'classify-src')
   const liveTarget = makePackage(alive, 'live-pkg')
@@ -87,10 +95,10 @@ test('三分类判对：断链 / 完好但过时 / 正常，且 scope 包按 @sc
   assert.equal(scan.total, 4, '总数含 scope 一层')
 
   // 证据要能指回目标：断链那条必须带 target 原文
-  assert.match(scan.dangling[0].target, /gone\/dangling-pkg$/)
+  assert.match(scan.dangling[0].target, /gone[\\/]dangling-pkg$/)
 })
 
-test('"过时"靠闭包判，不靠"目标存不存在"：同一个链接换个闭包就从 current 变成 stale', () => {
+testLink('"过时"靠闭包判，不靠"目标存不存在"：同一个链接换个闭包就从 current 变成 stale', () => {
   const dir = makeDir(home, 'closure', 'node_modules')
   const src = makeDir(home, 'closure-src')
   const target = makePackage(src, 'shared-pkg')
@@ -103,7 +111,7 @@ test('"过时"靠闭包判，不靠"目标存不存在"：同一个链接换个�
   assert.equal(stale.dangling.length, 0, '目标在，就不该判成断链')
 })
 
-test('scope 目录本身是真目录，不是链接——只下探一层，不递归', () => {
+testLink('scope 目录本身是真目录，不是链接——只下探一层，不递归', () => {
   const dir = makeDir(home, 'depth', 'node_modules')
   const src = makeDir(home, 'depth-src')
   const inner = makePackage(src, 'deep-pkg')
@@ -119,7 +127,7 @@ test('scope 目录本身是真目录，不是链接——只下探一层，不�
 
 // ── 2. 清理纪律 ────────────────────────────────────────────────────────────
 
-test('清理只删断链：完好的过时链接必须原样留着', () => {
+testLink('清理只删断链：完好的过时链接必须原样留着', () => {
   const dir = makeDir(home, 'cleanup', 'node_modules')
   const src = makeDir(home, 'cleanup-src')
   const staleTarget = makePackage(src, 'keep-pkg')
@@ -153,11 +161,13 @@ test('清理**绝不删目录**：同名位置是真目录时跳过并说明（�
   const result = cleanupDanglingLinks(dir, scan, path => { rmSync(path, { recursive: true, force: true }) })
   assert.equal(result.removed, 0, '真目录不许删')
   assert.equal(result.skipped, 1)
-  assert.match(result.skipReasons[0], /不是符号链接（目录）/)
+  // 0.2.1：判据从「是不是符号链接」放宽到「是不是链接」（Windows junction 也算），
+  // 文案随之从"不是符号链接"改成"不是链接"——它仍然明确说出这个条目是**目录**。
+  assert.match(result.skipReasons[0], /不是链接（目录）/)
   assert.equal(existsSync(join(realDir, 'important.txt')), true, '目录内容必须完好')
 })
 
-test('删除前重新核对：目标在扫描后被恢复 → 跳过不删', () => {
+testLink('删除前重新核对：目标在扫描后被恢复 → 跳过不删', () => {
   const dir = makeDir(home, 'recheck', 'node_modules')
   const target = makePackage(home, 'recheck-src/revived-pkg')
   const link = join(dir, 'revived-pkg')
@@ -188,7 +198,7 @@ test('已经不在的条目记"跳过"而不是"失败"（别人先删了不是�
   assert.match(result.skipReasons[0], /删除前已不存在/)
 })
 
-test('删除失败逐条报出来，不吞错', () => {
+testLink('删除失败逐条报出来，不吞错', () => {
   const dir = makeDir(home, 'fail', 'node_modules')
   makeDanglingLink(dir, 'boom-pkg')
   const scan = scanModuleFallback(dir, closureOf())
@@ -200,7 +210,7 @@ test('删除失败逐条报出来，不吞错', () => {
 
 // ── 3. 算不出闭包 / 目录不存在：如实记"没查" ─────────────────────────────────
 
-test('闭包算不出来时：断链照样查（它与闭包无关），只是"过时"这一类不猜', () => {
+testLink('闭包算不出来时：断链照样查（它与闭包无关），只是"过时"这一类不猜', () => {
   const dir = makeDir(home, 'noclosure', 'node_modules')
   const src = makeDir(home, 'noclosure-src')
   makeLiveLink(dir, 'some-pkg', makePackage(src, 'some-pkg'))
@@ -316,7 +326,7 @@ async function analyzeWith(opts = {}) {
   }
 }
 
-test('诊断层：断链报 module-fallback-dangling-link，证据带名字与目标，且说清"已不参与解析"', async () => {
+testLink('诊断层：断链报 module-fallback-dangling-link，证据带名字与目标，且说清"已不参与解析"', async () => {
   const report = await analyzeWith({ dangling: true })
   const issue = report.issues.find(i => i.code === 'module-fallback-dangling-link')
   assert.ok(issue !== undefined, '断链必须报出来：' + JSON.stringify(report.issues.map(i => i.code)))
@@ -330,7 +340,7 @@ test('诊断层：断链报 module-fallback-dangling-link，证据带名字与�
   assert.equal(issue.fix?.action, 'remove-dangling-module-fallback-links')
 })
 
-test('诊断层：完好但过时报 module-fallback-stale-link，且**没有** fix（只报不删）', async (t) => {
+testLink('诊断层：完好但过时报 module-fallback-stale-link，且**没有** fix（只报不删）', async (t) => {
   const report = await analyzeWith({ stale: true })
   if (report.issues.every(i => i.code !== 'module-fallback-stale-link') && report.skipped.some(s => s.check === 'module-fallback')) {
     // 本环境算不出闭包（没装官方包）：如实跳过，不假装通过。
@@ -344,7 +354,7 @@ test('诊断层：完好但过时报 module-fallback-stale-link，且**没有** 
   assert.match(issue.detail, /不自动删/)
 })
 
-test('诊断层开关：关掉后过时不再上报，但断链照样报（断链不受这个开关管）', async () => {
+testLink('诊断层开关：关掉后过时不再上报，但断链照样报（断链不受这个开关管）', async () => {
   const off = await analyzeWith({ dangling: true, stale: true, reportStale: false })
   assert.ok(off.issues.some(i => i.code === 'module-fallback-dangling-link'), '断链不受开关影响')
   assert.ok(!off.issues.some(i => i.code === 'module-fallback-stale-link'), '过时被开关静音')
@@ -362,7 +372,7 @@ test('诊断层：兜底目录不存在时记 skipped，而不是画成"查过�
   assert.match(skip.reason, /不存在/)
 })
 
-test('诊断层：闭包算不出来时只把"过时"这一类标成没查，断链照常产出（不许整层画成没查）', async () => {
+testLink('诊断层：闭包算不出来时只把"过时"这一类标成没查，断链照常产出（不许整层画成没查）', async () => {
   const report = await analyzeWith({ dangling: true })
   // 这个环境没有安装锚点 → 闭包算不出来
   assert.ok(report.issues.some(i => i.code === 'module-fallback-dangling-link'),
@@ -376,7 +386,7 @@ test('诊断层：闭包算不出来时只把"过时"这一类标成没查，断
 
 // ── 6. 私有兜底层（<profile>/.dsh-module-fallback）────────────────────────────
 
-test('私有层：断链单独报（官方有清理机制却没清掉，属于官方漏了）', () => {
+testLink('私有层：断链单独报（官方有清理机制却没清掉，属于官方漏了）', () => {
   const profileDir = makeDir(home, 'private', 'profs', 'web')
   const owned = makeDir(home, 'private', 'profs', 'web', '.dsh-module-fallback', 'node_modules')
   const src = makeDir(home, 'private', 'src')
@@ -390,7 +400,7 @@ test('私有层：断链单独报（官方有清理机制却没清掉，属于�
   assert.equal(scan.total, 2, '总数含正常的那些')
 })
 
-test('私有层：只下探 scope 一层，不递归（与共享层同一套纪律）', () => {
+testLink('私有层：只下探 scope 一层，不递归（与共享层同一套纪律）', () => {
   const profileDir = makeDir(home, 'private-depth', 'profs', 'web')
   const owned = makeDir(home, 'private-depth', 'profs', 'web', '.dsh-module-fallback', 'node_modules')
   const src = makeDir(home, 'private-depth', 'src')
@@ -413,7 +423,7 @@ test('私有层：目录不存在时 exists=false（不是"查过且干净"）',
   assert.deepEqual(scan.dangling, [])
 })
 
-test('私有层：诊断层报 profile-module-fallback-dangling-link，且**没有** fix（归官方管，我们不删）', async () => {
+testLink('私有层：诊断层报 profile-module-fallback-dangling-link，且**没有** fix（归官方管，我们不删）', async () => {
   const { analyzeEnvironment } = await import('../dist/diagnostics.js')
   const root = mkdtempSync(join(tmpdir(), 'pmc-fb-private-'))
   const envDir = join(root, 'profiles', 'privenv')
@@ -470,7 +480,7 @@ test('客户端默认值与 host 默认值逐字段一致（开关默认必须�
 
 // ── 8. 计数口径（Lead 复核 task-100：171 与 516 都对，含义不同）───────────────
 
-test('计数口径：total 数的是「顶层链接 + @scope 下一层」，不是 maxdepth 1', () => {
+testLink('计数口径：total 数的是「顶层链接 + @scope 下一层」，不是 maxdepth 1', () => {
   const dir = makeDir(home, 'caliber', 'node_modules')
   const src = makeDir(home, 'caliber-src')
   // 顶层 3 条
@@ -494,7 +504,7 @@ test('计数口径：total 数的是「顶层链接 + @scope 下一层」，不�
     '闭包可用时三类之和应等于 total')
 })
 
-test('计数口径：闭包不可用时 total 仍数「扫到的条数」，与三类之和可以不相等', () => {
+testLink('计数口径：闭包不可用时 total 仍数「扫到的条数」，与三类之和可以不相等', () => {
   const dir = makeDir(home, 'caliber2', 'node_modules')
   const src = makeDir(home, 'caliber2-src')
   makeDanglingLink(dir, 'broken')
@@ -522,7 +532,7 @@ test('文档口径与实现一致：DESIGN 里的数字必须带口径说明', (
 
 // ── 9. 幂等（Lead 复核 task-100 ②：修完再跑不该重复报）───────────────────────
 
-test('幂等：删完断链后再扫，断链归零且不再报该 issue，而「过时」仍在', () => {
+testLink('幂等：删完断链后再扫，断链归零且不再报该 issue，而「过时」仍在', () => {
   const dir = makeDir(home, 'idem', 'node_modules')
   const src = makeDir(home, 'idem-src')
   makeDanglingLink(dir, 'd1')
@@ -552,7 +562,7 @@ test('幂等：删完断链后再扫，断链归零且不再报该 issue，而�
 
 // ── 10. 变空的 scope 目录清理（task-101）─────────────────────────────────────
 
-test('删完断链后，变空的 @scope 目录一并删掉；非空的一律不碰', () => {
+testLink('删完断链后，变空的 @scope 目录一并删掉；非空的一律不碰', () => {
   const dir = makeDir(home, 'scope-clean', 'node_modules')
   const src = makeDir(home, 'scope-clean-src')
   // 空 scope：里面的链接删完就空了
@@ -586,7 +596,7 @@ test('scope 清理只删空目录：里面有任何一项（哪怕是一个文�
   assert.equal(existsSync(join(scope, 'stray.txt')), true, '内容必须完好')
 })
 
-test('scope 清理只认 @scope 形态的一级真目录：符号链接与普通目录都不碰', () => {
+testLink('scope 清理只认 @scope 形态的一级真目录：符号链接与普通目录都不碰', () => {
   const dir = makeDir(home, 'scope-shape', 'node_modules')
   const src = makeDir(home, 'scope-shape-src')
   // 普通目录（不以 @ 开头）：不碰
@@ -602,7 +612,7 @@ test('scope 清理只认 @scope 形态的一级真目录：符号链接与普通
   assert.equal(lstatSync(join(dir, '@alink')).isSymbolicLink(), true, '符号链接不许碰（它不是目录）')
 })
 
-test('钉住语义：readdirSync(withFileTypes) 的 isDirectory() **不跟随**符号链接', () => {
+testLink('钉住语义：readdirSync(withFileTypes) 的 isDirectory() **不跟随**符号链接', () => {
   // 为什么单独一条（Lead 在 task-101 复核时指出）：
   // 本模块让「以 @ 开头的符号链接」落进 isDirectory()===false 那一支，靠的是 Node 这个语义。
   // 变异验证（M4）把「不限定真目录」判为空变异，正是因为改掉那行行为等价——
@@ -688,7 +698,7 @@ async function runFixOp(homeDir) {
   throw new Error('fix job 未落定')
 }
 
-test('fix 动作：没有断链但有空的 scope 目录时，也要真的清掉并在输出里说明（M8 变异）', async () => {
+testLink('fix 动作：没有断链但有空的 scope 目录时，也要真的清掉并在输出里说明（M8 变异）', async () => {
   // M8 变异（在"没有断链"时早退）原本全绿——说明动作层这条路径没有被测到。
   // 真机正是这个形态：Lead 执行过一次清理，516 条链接归零，剩 29 个空 scope 目录。
   const home2 = mkdtempSync(join(tmpdir(), 'pmc-fix-scope-'))
@@ -720,7 +730,7 @@ test('fix 动作：没有断链但有空的 scope 目录时，也要真的清掉
   }
 })
 
-test('fix 动作幂等：连跑两次，第二次不报错也不重复删', async () => {
+testLink('fix 动作幂等：连跑两次，第二次不报错也不重复删', async () => {
   const home2 = mkdtempSync(join(tmpdir(), 'pmc-fix-idem-'))
   const previous = process.env.DSH_HOME
   process.env.DSH_HOME = home2

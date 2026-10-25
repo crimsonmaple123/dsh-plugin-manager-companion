@@ -24,7 +24,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { isBuiltin } from 'node:module'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   OFFICIAL_DEP_ALLOWED, installedPackageDir, isLoaderProvided, locatePatchRows,
@@ -274,8 +274,19 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>
 }
 
-/** 相对路径（不在目录内时返回绝对路径）。 */
+/**
+ * 相对路径（不在目录内时返回绝对路径）。
+ *
+ * 分隔符统一成 `/`：这些路径会出现在**给用户看的证据行**里（`…:12`），
+ * 同一份报告不该因为跑在 Windows 还是 Linux 上而长得不一样——测试里钉住的
+ * 也是 `dist/server.js:1` 这种形态。真正的文件操作仍用原始路径，这里只改显示。
+ *
+ * @param base - 基准目录。
+ * @param file - 目标文件。
+ * @returns 展示用路径。
+ */
 function relativeTo(base: string, file: string): string {
   const rel = relative(base, file)
-  return rel.length === 0 || rel.startsWith('..') ? file : rel
+  const shown = rel.length === 0 || rel.startsWith('..') ? file : rel
+  return shown.split(sep).join('/')
 }

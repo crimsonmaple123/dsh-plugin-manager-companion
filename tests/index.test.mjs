@@ -12,6 +12,7 @@ import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, s
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { linkKindOf, removeLink } from '../dist/links.js'
 
 const home = mkdtempSync(join(tmpdir(), "companion-home-"))
 const originalHome = process.env.DSH_HOME
@@ -234,7 +235,7 @@ test('环境名不安全时被拒（路径逃逸防线）', async () => {
 })
 
 /** 造一份 P4 用的 manager 桩件：installBundle 复刻官方 add 的真实磁盘效果（依赖 + link: 符号链接）。 */
-function makeRollbackManager(envDir, packageName, sourceDir, { removeLink }) {
+function makeRollbackManager(envDir, packageName, sourceDir, { removeLink: shouldRemoveLink }) {
   const readManifest = () => JSON.parse(readFileSync(join(envDir, 'package.json'), 'utf8'))
   const writeManifest = (manifest) => writeFileSync(join(envDir, 'package.json'), JSON.stringify(manifest, undefined, 2) + '\n')
   return {
@@ -259,7 +260,14 @@ function makeRollbackManager(envDir, packageName, sourceDir, { removeLink }) {
       const manifest = readManifest()
       if (manifest.dependencies !== undefined) delete manifest.dependencies[packageName]
       writeManifest(manifest)
-      if (removeLink) rmSync(join(envDir, 'node_modules', packageName), { force: true })
+      if (shouldRemoveLink) {
+        // 必须按链接形态删：Windows 上这里是 junction，`rmSync(..., {force:true})`
+        // 会以 ERR_FS_EISDIR 失败（它把 junction 当目录）。removeLink 对 junction
+        // 走 rmdir、对符号链接走 unlink，两者都不碰目标内容。
+        const target = join(envDir, 'node_modules', packageName)
+        const kind = linkKindOf(target)
+        if (kind !== undefined) removeLink(target, kind)
+      }
       return { application: 'applied', stage: 'remove', target: packageName, changed: true }
     },
   }
@@ -289,8 +297,10 @@ test('P4: 回滚后如实陈述磁盘状态——留下链接时不再说「环�
   const settled = await settle(deps, jobIdOf((await handleOp('install', { spec: './probe-bad', environment: 'demo-env' }, deps)).value))
   const result = settled.result
   assert.equal(result.ok, false)
-  // 磁盘前提：残留确实在（官方 pnpm remove 之后链接仍在）
-  assert.equal(lstatSync(join(envDir, 'node_modules', pkg)).isSymbolicLink(), true, '测试前提：残留链接真的在磁盘上')
+  // 磁盘前提：残留确实在（官方 pnpm remove 之后链接仍在）。
+  // 0.2.1：Windows 上这条残留是 **junction**，`lstat().isSymbolicLink()` 为 false，
+  // 所以判据换成"链接形态可识别"（符号链接或 junction），而不是只认符号链接。
+  assert.equal(linkKindOf(join(envDir, 'node_modules', pkg)) !== undefined, true, '测试前提：残留链接真的在磁盘上')
   // 文案必须与磁盘一致：manifest 说清了、残留说清了、断言「未改动」消失
   // 文案按 DESIGN §12.6 分层：不再以「package.json：」「node_modules：」当句子主语（路径语义不上屏）。
   // 清单已回滚干净（所以没有"依赖声明还在"那行），但**残留链接必须说出来**——
@@ -309,6 +319,7 @@ test('P4: 回滚干净时（没有残留）才报 rolledBack=true 并说明无�
   mkdirSync(sourceDir, { recursive: true })
   const deps = installDeps(envDir, makeRollbackManager(envDir, pkg, sourceDir, { removeLink: true }))
   const settled = await settle(deps, jobIdOf((await handleOp('install', { spec: './probe-clean', environment: 'demo-env' }, deps)).value))
+  assert.equal(settled.error, undefined, '安装 job 不许抛错：' + String(settled.error))
   const result = settled.result
   assert.equal(result.ok, false)
   assert.match(result.output, /没有留下安装残留/)

@@ -71,13 +71,13 @@ const fs = require("node:fs")
 const p = process.argv[1] + "/profiles/web/package.json"
 const json = JSON.parse(fs.readFileSync(p, "utf8"))
 json.name = "dsh-profile-realdevice"
-json.dependencies = Object.assign({}, json.dependencies, { "dsh-plugin-manager-companion": "link:" + process.argv[2] })
+json.dependencies = Object.assign({}, json.dependencies, { "dsh-plugin-manager-companion-cmaple": "link:" + process.argv[2] })
 fs.writeFileSync(p, JSON.stringify(json, null, 2) + "\n")
 ' "$HOME_DIR" "$REPO"
 ( cd "$HOME_DIR/profiles/web" && pnpm install --prefer-offline >/dev/null 2>&1 ) || { echo "环境问题: 临时 profile 安装失败"; exit 2; }
 # pnpm 会把 link: 依赖写成**相对**软链（相对临时 profile 的深度），在我们这个 /tmp 临时 HOME 里指向不存在的路径
 # ——实测 "cannot resolve profile bundle"。这里改成绝对目标（只动临时环境里的那个软链）。
-ln -sfn "$REPO" "$HOME_DIR/profiles/web/node_modules/dsh-plugin-manager-companion"
+ln -sfn "$REPO" "$HOME_DIR/profiles/web/node_modules/dsh-plugin-manager-companion-cmaple"
 
 echo "== 段 1/3：正常索引（市场页 + 中文搜索）=="
 boot "$LOG_PREFIX-normal.log" || exit 2

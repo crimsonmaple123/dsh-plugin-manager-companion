@@ -107,19 +107,26 @@ function configWith(overrides = {}) {
   }
 }
 
+/**
+ * 金丝雀跑完要删测试环境；删除前要求进程事实可读。
+ * 进程表可读性是平台能力（受限环境里 CIM 返回 Access denied），
+ * 这些用例验的是升级/清理逻辑，与机器能否读进程表无关——注入一份「可读且无实例」。
+ */
+const IDLE_FACTS = () => ({ runs: new Map(), readable: true })
+
 after(() => { rmSync(HOME, { recursive: true, force: true }) })
 
 // ── ① 三类单元 ────────────────────────────────────────────────────────────
 
 test('三类单元分开：profile 依赖可升 / 安装方提供的层只检测+命令 / 本插件自身是 self', () => {
   makeEnv('three', {
-    bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-plugin-manager-companion', 'probe-plugin'],
+    bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-plugin-manager-companion-cmaple', 'probe-plugin'],
     dependencies: {
-      'dsh-plugin-manager-companion': 'link:' + join(HOME, 'repo'),
+      'dsh-plugin-manager-companion-cmaple': 'link:' + join(HOME, 'repo'),
       'probe-plugin': '^1.2.3',
     },
     installed: {
-      'dsh-plugin-manager-companion': '0.1.0',
+      'dsh-plugin-manager-companion-cmaple': '0.1.0',
       'probe-plugin': '1.2.0',
     },
   })
@@ -129,8 +136,8 @@ test('三类单元分开：profile 依赖可升 / 安装方提供的层只检测
   assert.equal(byName.get('probe-plugin').spec, '^1.2.3')
   assert.equal(byName.get('probe-plugin').currentVersion, '1.2.0')
   assert.equal(byName.get('probe-plugin').specIsLocal, false)
-  assert.equal(byName.get('dsh-plugin-manager-companion').kind, 'self', '本插件自身是第三类')
-  assert.equal(byName.get('dsh-plugin-manager-companion').specIsLocal, true, 'link: 是本地来源（升级会改来源）')
+  assert.equal(byName.get('dsh-plugin-manager-companion-cmaple').kind, 'self', '本插件自身是第三类')
+  assert.equal(byName.get('dsh-plugin-manager-companion-cmaple').specIsLocal, true, 'link: 是本地来源（升级会改来源）')
   assert.equal(byName.get('@deepseek-ai/dsh-base').kind, 'installation-provided', '只在 bundles 里 = 安装方提供')
   assert.equal(byName.get('@deepseek-ai/dsh-base').spec, undefined)
   assert.equal(byName.get('@deepseek-ai/dsh-base').currentVersion, null, '读不到版本就如实 null，不猜')
@@ -322,6 +329,7 @@ test('金丝雀通过才升级：官方 add <name>@<version>，测试环境用�
   const runner = makeRunner(() => ({ name: 'probe-plugin', version: '1.1.0' }))
   const logs = []
   const result = await up.upgradePackage({
+    processFacts: IDLE_FACTS,
     environment: 'canary-ok', name: 'probe-plugin', version: '1.1.0',
     config: configWith({ trial: CANARY_ON }),
     installAnchor: '/anchor/package.json', trial: trial.run, runCommand: runner.run, log: (line) => logs.push(line),
@@ -351,6 +359,7 @@ test('金丝雀候选坏 / 没验证：一律不升级，且说清是哪种（"�
     const trial = makeTrial(conclusion)
     const runner = makeRunner(() => ({ name: 'probe-plugin', version: '1.1.0' }))
     const result = await up.upgradePackage({
+    processFacts: IDLE_FACTS,
       environment: 'canary-' + conclusion, name: 'probe-plugin', version: '1.1.0',
       config: configWith({ trial: CANARY_ON }),
       installAnchor: '/anchor/package.json', trial: trial.run, runCommand: runner.run, log: () => {},
@@ -366,6 +375,7 @@ test('金丝雀候选坏 / 没验证：一律不升级，且说清是哪种（"�
   // 引擎自己抛异常 = 没能验证，同样不升级
   makeEnv('canary-throw', { bundles: ['probe-plugin'], dependencies: { 'probe-plugin': '^1.0.0' }, installed: { 'probe-plugin': '1.0.0' } })
   const thrown = await up.upgradePackage({
+    processFacts: IDLE_FACTS,
     environment: 'canary-throw', name: 'probe-plugin', version: '1.1.0',
     config: configWith({ trial: CANARY_ON }),
     installAnchor: '/anchor/package.json',
@@ -382,6 +392,7 @@ test('试装总开关关闭：不跑金丝雀，但必须如实说明"未验证�
   const trial = makeTrial('candidate-broken')
   const runner = makeRunner(() => ({ name: 'probe-plugin', version: '1.1.0' }))
   const result = await up.upgradePackage({
+    processFacts: IDLE_FACTS,
     environment: 'canary-off', name: 'probe-plugin', version: '1.1.0',
     config: configWith({ trial: { ...settings.DEFAULT_TRIAL_CONFIG, enabled: false } }),
     installAnchor: '/anchor/package.json', trial: trial.run, runCommand: runner.run, log: () => {},
@@ -495,6 +506,8 @@ test('金丝雀验证升级：走真引擎，候选先卸再装才进层栈（�
   const liveCalls = []
   const canary = await up.runUpgradeCanary('act-live', spec, configWith({ trial: CANARY_ON }), {
     installAnchor: '/anchor/package.json',
+    // 金丝雀跑完要删测试环境；删除前要求进程事实可读（受限环境读不到进程表）。
+    processFacts: IDLE_FACTS,
     runCommand: reconcileRunner(liveCalls),
     // 注入"永远挂载成功"：这条测试验的是**层栈激活**，不是启动器（真启动另有真机证据）。
     verify: mounted,
@@ -527,6 +540,7 @@ test('金丝雀自核验激活：替身说"通过"但层栈里没有候选 → �
     },
   }
   const result = await up.upgradePackage({
+    processFacts: IDLE_FACTS,
     environment: 'canary-liar', name: 'probe-plugin', version: '1.1.0',
     config: configWith({ trial: CANARY_ON }),
     installAnchor: '/anchor/package.json', trial: liar.run, runCommand: makeRunner().run, log: () => {},
@@ -587,6 +601,7 @@ test('升级失败如实报：官方退出码非零 / 盘上没到位，都不�
   makeEnv('fail-run', { bundles: ['probe-plugin'], dependencies: { 'probe-plugin': '^1.0.0' }, installed: { 'probe-plugin': '1.0.0' } })
   const runner = makeRunner(() => ({ exitCode: 1, output: 'ERR_PNPM_NETWORK', version: undefined }))
   const result = await up.upgradePackage({
+    processFacts: IDLE_FACTS,
     environment: 'fail-run', name: 'probe-plugin', version: '1.1.0',
     config: configWith({ trial: { ...settings.DEFAULT_TRIAL_CONFIG, enabled: false } }),
     installAnchor: '/anchor/package.json', runCommand: runner.run, log: () => {},
@@ -643,6 +658,7 @@ test('原来就是本地来源（link:）时：回滚装回那个来源，而不
 test('拿不到 installAnchor 时拒绝升级（绝不猜路径）', async () => {
   makeEnv('noanchor', { bundles: ['probe-plugin'], dependencies: { 'probe-plugin': '^1.0.0' }, installed: { 'probe-plugin': '1.0.0' } })
   const result = await up.upgradePackage({
+    processFacts: IDLE_FACTS,
     environment: 'noanchor', name: 'probe-plugin', version: '1.1.0',
     config: configWith({ trial: { ...settings.DEFAULT_TRIAL_CONFIG, enabled: false } }),
     runCommand: makeRunner().run, log: () => {},
@@ -657,7 +673,8 @@ test('拿不到 installAnchor 时拒绝升级（绝不猜路径）', async () =>
 
 test('升级设置：默认每天一次、自动检查开；归一与间隔映射都要有确定值', () => {
   assert.deepEqual(settings.DEFAULT_UPGRADE_CONFIG, { autoCheck: true, interval: 'daily', registryUrl: '' })
-  const resolved = settings.ConfigSchema({})
+  const resolved = settings.resolveConfigValue(settings.ConfigSchema({}))
+  assert.notEqual(resolved, undefined, 'volatile 配置必须能取出快照')
   for (const key of Object.keys(settings.DEFAULT_UPGRADE_CONFIG)) {
     assert.notEqual(resolved.upgrade[key], undefined, 'schema 回填后 ' + key + ' 不能是 undefined')
   }
@@ -695,9 +712,9 @@ function makeDeps({ upgrade, capabilities } = {}) {
 
 test('op 层：upgradeCheck 直接给四态；upgrade / upgradeRollback 都是 job（自身升级走独立 job）', async () => {
   makeEnv('three', {
-    bundles: ['@deepseek-ai/dsh-base', 'dsh-plugin-manager-companion', 'probe-plugin'],
-    dependencies: { 'dsh-plugin-manager-companion': 'link:' + join(HOME, 'repo'), 'probe-plugin': '^1.0.0' },
-    installed: { 'dsh-plugin-manager-companion': '0.1.0', 'probe-plugin': '1.0.0' },
+    bundles: ['@deepseek-ai/dsh-base', 'dsh-plugin-manager-companion-cmaple', 'probe-plugin'],
+    dependencies: { 'dsh-plugin-manager-companion-cmaple': 'link:' + join(HOME, 'repo'), 'probe-plugin': '^1.0.0' },
+    installed: { 'dsh-plugin-manager-companion-cmaple': '0.1.0', 'probe-plugin': '1.0.0' },
   })
   const runner = makeRunner(() => ({ name: 'probe-plugin', version: '1.1.0' }))
   const trial = makeTrial('passed')
@@ -705,7 +722,7 @@ test('op 层：upgradeCheck 直接给四态；upgrade / upgradeRollback 都是 j
   const check = await index.handleOp('upgradeCheck', { refresh: true }, deps)
   assert.equal(check.ok, true)
   const names = check.value.units.map((unit) => unit.name).sort()
-  assert.deepEqual(names, ['@deepseek-ai/dsh-base', 'dsh-plugin-manager-companion', 'probe-plugin'])
+  assert.deepEqual(names, ['@deepseek-ai/dsh-base', 'dsh-plugin-manager-companion-cmaple', 'probe-plugin'])
   assert.equal(check.value.units.find((unit) => unit.name === '@deepseek-ai/dsh-base').state, 'not-upgradable')
 
   const started = await index.handleOp('upgrade', { name: 'probe-plugin', version: '1.1.0' }, deps)
@@ -722,13 +739,14 @@ test('op 层：upgradeCheck 直接给四态；upgrade / upgradeRollback 都是 j
 
 test('自升级：结论里必须写"下次启动生效"（官方口径），并且是 job', async () => {
   const dir = makeEnv('self', {
-    bundles: ['dsh-plugin-manager-companion'],
-    dependencies: { 'dsh-plugin-manager-companion': 'link:' + join(HOME, 'repo') },
-    installed: { 'dsh-plugin-manager-companion': '0.1.0' },
+    bundles: ['dsh-plugin-manager-companion-cmaple'],
+    dependencies: { 'dsh-plugin-manager-companion-cmaple': 'link:' + join(HOME, 'repo') },
+    installed: { 'dsh-plugin-manager-companion-cmaple': '0.1.0' },
   })
   void dir
-  const runner = makeRunner(() => ({ name: 'dsh-plugin-manager-companion', version: '0.2.0' }))
+  const runner = makeRunner(() => ({ name: 'dsh-plugin-manager-companion-cmaple', version: '0.2.0' }))
   const result = await up.upgradePackage({
+    processFacts: IDLE_FACTS,
     environment: 'self', name: paths.OUR_PACKAGE_NAME, version: '0.2.0',
     config: configWith({ trial: { ...settings.DEFAULT_TRIAL_CONFIG, enabled: false } }),
     installAnchor: '/anchor/package.json', runCommand: runner.run, log: () => {},

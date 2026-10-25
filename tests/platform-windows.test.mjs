@@ -12,9 +12,13 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { childProcessSupport, processTableSupport, testWhen } from './platform-support.mjs'
 
 const HOME = mkdtempSync(join(tmpdir(), 'pmc-win49-'))
 process.env.DSH_HOME = HOME
+
+/** W-01/W-02 那条要真起进程并真读进程表：拿不到能力就如实跳过（不删用例、不伪造）。 */
+const testSpawn = testWhen(test, processTableSupport().ok ? childProcessSupport() : processTableSupport())
 
 const paths = await import('../dist/paths.js')
 const env = await import('../dist/envManager.js')
@@ -85,7 +89,7 @@ test('W-01 同族: rename 的源与目标在同一台机器上是同一环境时
   })
 })
 
-test('W-01 同族 + W-02: 运行中的查找按同环境匹配，且 Windows 分支如实报 taskkill', async () => {
+testSpawn('W-01 同族 + W-02: 运行中的查找按同环境匹配，且 Windows 分支如实报 taskkill', async () => {
   // 造一个「命令行像真实例」的真实子进程（Linux 也能起），放进进程扫描缓存；
   // 然后用非规范大小写的名字去停它 —— 修复前 .get('DEMO') 会查不到 → 报 not-running。
   makeEnv('demo')
@@ -110,10 +114,17 @@ test('W-01 同族 + W-02: 运行中的查找按同环境匹配，且 Windows 分
       current: null, timeoutMs: 400, sleep: async () => {}, now: () => (clock += 200),
       readCommand: () => commandLine,
     }))
-    assert.equal(result.ok, false, '进程没死就绝不能说停成功')
-    assert.equal(result.code, 'kill-timeout')
+    let alive
+    try {
+      process.kill(child.pid, 0)
+      alive = true
+    } catch (error) {
+      if (error?.code !== 'ESRCH') throw error
+      alive = false
+    }
+    assert.equal(result.ok, !alive, 'Stop result must match actual process state')
+    if (alive) assert.equal(result.code, 'kill-timeout')
     assert.match(result.output, /taskkill \/T \/F/)
-    assert.equal(child.exitCode === null && child.signalCode === null, true, '前提：子进程确实还活着')
   } finally {
     env.resetRunCache()
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
@@ -154,7 +165,9 @@ test('W-08: Windows 终端窗口用 argv 形态（wt），不再把裸拼接的�
     args: ['--profile', 'demo', '--port', '3590', '--no-open'],
   }
   const shim = env.windowsTerminalInvocation(shimSpec)
-  assert.equal(shim.args[2], 'cmd.exe')
+  // 生产代码用 ComSpec（Windows 上就是 C:\Windows\system32\cmd.exe），没有时才回落到裸名。
+  // 断言必须与这条口径一致：写死 'cmd.exe' 只在 Linux（ComSpec 未设）上成立。
+  assert.equal(shim.args[2], process.env.ComSpec ?? 'cmd.exe')
   assert.deepEqual(shim.args.slice(3, 6), ['/d', '/s', '/c'], '显式 cmd /d /s /c，不是 shell:true 拼接')
   assert.equal(shim.args[6], 'dsh.cmd')
   // 含空格参数：终端路径同样拒绝（审计 N-01 实测的 C:\\Program Files\\x.yml 场景）

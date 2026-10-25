@@ -21,8 +21,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Checkbox, IconChevronDownOutline14, IconChevronUpOutline14, IconGlobeOutline14, IconRefreshOutline14,
-  IconSearchOutline16, Input, Modal, Tag, Toast, Tooltip,
+  Button, Checkbox, IconChevronDownOutlineRegular, IconChevronUpOutlineRegular, IconGlobeOutlineRegular, IconRefreshOutlineRegular,
+  IconSearchOutlineRegular, Input, Modal, Tag, Toast, Tooltip,
   type TagTone,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
@@ -383,7 +383,7 @@ export function MarketplacePage({
         <Button
           variant="outline"
           size="sm"
-          icon={<IconRefreshOutline14 />}
+          icon={<IconRefreshOutlineRegular />}
           disabled={loading}
           onClick={() => { loadMarketplace(true) }}
         >
@@ -402,7 +402,7 @@ export function MarketplacePage({
 
       <div className={css.filters}>
         <Input
-          icon={<IconSearchOutline16 />}
+          icon={<IconSearchOutlineRegular />}
           value={query}
           placeholder={t('market.search')}
           aria-label={t('market.search')}
@@ -445,7 +445,7 @@ export function MarketplacePage({
             variant="outline"
             size="sm"
             aria-label={t('market.sortDirection')}
-            icon={toolbar.direction === 'desc' ? <IconChevronDownOutline14 /> : <IconChevronUpOutline14 />}
+            icon={toolbar.direction === 'desc' ? <IconChevronDownOutlineRegular /> : <IconChevronUpOutlineRegular />}
             onClick={() => { setDescending(previous => !previous) }}
           >
             {t(MARKET_LABEL[toolbar.directionLabelKey])}
@@ -527,7 +527,7 @@ export function MarketplacePage({
                 <p className={css.repoLine}>
                   <code className={css.repo}>{item.repo}</code>
                   <a className={css.link} href={`https://github.com/${item.repo}`} target="_blank" rel="noreferrer">
-                    <IconGlobeOutline14 /> {t('market.openRepo')}
+                    <IconGlobeOutlineRegular /> {t('market.openRepo')}
                   </a>
                 </p>
                 <p className={css.desc}>{item.description}</p>

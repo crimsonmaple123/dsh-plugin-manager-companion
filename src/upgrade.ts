@@ -32,6 +32,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { PackageOperationContext, PackageOperationOptions } from '@deepseek-ai/dsh-plugin-manager/operations'
 import type { PackageResult } from '@deepseek-ai/dsh-plugin-manager/types'
 import { EnvironmentError, removeTrialEnvironment, runTrialInstall, trialEnvironmentName } from './envManager.ts'
+import type { ProcessFacts } from './envManager.ts'
 import type { BootVerification, PluginCommandRunner, TrialInstallOptions, TrialInstallResult } from './envManager.ts'
 
 /**
@@ -774,6 +775,14 @@ export interface UpgradeEngineDeps {
   readonly verify?: (name: string) => Promise<BootVerification>
   readonly fetch?: Fetcher
   readonly now?: () => number
+  /**
+   * 进程事实读取器（测试注入）。
+   *
+   * 为什么要有这个缝：金丝雀跑完要删掉测试环境，而删除前要求进程事实**可读**。
+   * 进程表可读性是平台能力（受限环境里 CIM 返回 Access denied），没有这条缝，
+   * 「用完即删」在那些平台上只能失败，测试也就只能跳过。
+   */
+  readonly processFacts?: () => ProcessFacts
   /** 清理日志回调（测试注入；生产写 <DSH_HOME>/dpmc-trial-cleanup.log）。 */
   readonly log?: (line: string) => void
 }
@@ -1079,7 +1088,10 @@ function activationFor(
  */
 async function removeCanaryEnvironment(environment: string, deps: UpgradeEngineDeps): Promise<string> {
   const target = trialEnvironmentName(environment)
-  const result = await removeTrialEnvironment(target, deps.ctx === undefined ? {} : { ctx: deps.ctx })
+  const result = await removeTrialEnvironment(target, {
+    ...(deps.ctx === undefined ? {} : { ctx: deps.ctx }),
+    ...(deps.processFacts === undefined ? {} : { facts: deps.processFacts() }),
+  })
   if (result.ok) {
     appendCanaryLog('removed ' + target + '：升级试装验证用完即删（一次性资产）', deps)
     return '测试环境已删除：' + target

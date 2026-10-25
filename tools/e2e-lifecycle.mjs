@@ -8,7 +8,7 @@
  *
  * 与旧版 tools/e2e-lifecycle.sh 的差别（平台审计 W-24）：
  *   · **不复制 ~/.dsh/profiles/pm-test**、不跑 pnpm install：自己写 manifest + link 安装本仓库
- *     （`bundles: [base, web-app, dsh-plugin-manager-companion]`），官方 bundle 由**安装锚点**解析；
+ *     （`bundles: [base, web-app, dsh-plugin-manager-companion-cmaple]`），官方 bundle 由**安装锚点**解析；
  *   · **零 shell**：不起 bash、不调 ss/grep/curl/setsid/pkill/date；端口用 node:net，HTTP 用全局 fetch，
  *     读日志用 fs，计时用 Date.now()；
  *   · 断言清单与输出格式与旧脚本**逐项同构**（PASS/FAIL + 计数 + 退出码），换实现不换判据。
@@ -153,11 +153,11 @@ function buildHostProfile(home, name) {
   writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
     name: 'dsh-profile-' + name,
     private: true,
-    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-plugin-manager-companion'] } },
-    dependencies: { 'dsh-plugin-manager-companion': 'link:' + REPO },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-plugin-manager-companion-cmaple'] } },
+    dependencies: { 'dsh-plugin-manager-companion-cmaple': 'link:' + REPO },
   }, undefined, 2) + String.fromCharCode(10))
   // junction：Windows 上不需要 symlink 特权（官方 app-boot 的 ensureSymlink 同款）；POSIX 下 type 被忽略。
-  symlinkSync(REPO, join(profileDir, 'node_modules', 'dsh-plugin-manager-companion'), 'junction')
+  symlinkSync(REPO, join(profileDir, 'node_modules', 'dsh-plugin-manager-companion-cmaple'), 'junction')
   writeFileSync(join(profileDir, 'cordis.yml'), '[]' + String.fromCharCode(10))
   return profileDir
 }

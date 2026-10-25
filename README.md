@@ -1,9 +1,9 @@
-# dsh-plugin-manager-companion
+# dsh-plugin-manager-companion-cmaple
 
 DSH 官方插件管理器的补充：安装前质量门、五层环境诊断、多环境管理与插件市场。
 
-[![npm version](https://img.shields.io/npm/v/dsh-plugin-manager-companion)](https://www.npmjs.com/package/dsh-plugin-manager-companion)
-[![license](https://img.shields.io/npm/l/dsh-plugin-manager-companion)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/dsh-plugin-manager-companion-cmaple)](https://www.npmjs.com/package/dsh-plugin-manager-companion-cmaple)
+[![license](https://img.shields.io/npm/l/dsh-plugin-manager-companion-cmaple)](LICENSE)
 
 前身是 [dsh-web-plugin-manager](https://github.com/LX2000WASD/dsh-web-plugin-manager)（0.6.3，已停止维护）。
 DSH 0.1.6-alpha.2 起官方自带插件管理页，旧仓库遮蔽官方页面并自建写权的做法不再适用，本仓库为重写。
@@ -50,10 +50,11 @@ DSH 0.1.6-alpha.2 起官方自带插件管理页，旧仓库遮蔽官方页面�
 ## 安装
 
 ```sh
-dsh plugin --profile <name> add dsh-plugin-manager-companion@latest
+dsh plugin --profile <name> add dsh-plugin-manager-companion-cmaple@latest
 ```
 
-要求 DSH >= 0.1.6-alpha.2。装好后在插件管理页启用，重启该 profile。
+要求 DSH **0.2.1-rc.3**（`engines.dsh = "^0.2.1-rc.3"`；更早的版本会被官方兼容闸门拒绝安装）。
+装好后在插件管理页启用，重启该 profile。
 
 ## 能力
 
@@ -121,7 +122,7 @@ dshpmc install | remove | update | mount | uninstall-kind
 
 ## 已知限制
 
-- 只支持 DSH >= 0.1.6-alpha.2；更早的版本请用旧仓库的 0.6.x。
+- 只支持 DSH **0.2.1-rc.3**；更早的版本请用旧仓库的 0.6.x，或本仓库的 0.1.x 线。
 - 两条需要修改 `cordis.patch.yml` 结构的修复（删除重复行、删除孤儿行）只给出步骤，由用户手工完成。本插件不写这个文件。
 - 质量门回滚可能失败：官方拒绝移除部分组合包时（例如它被官方保护），结果中会说明残留，需要手工删除。
 - 安装守卫拦的是 agent 的工具调用，拦不住在终端里手敲的命令。

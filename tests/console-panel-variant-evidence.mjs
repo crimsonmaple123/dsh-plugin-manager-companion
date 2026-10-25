@@ -41,7 +41,7 @@ const THEME = arg('theme', 'light')
 /** 这一轮的角色：before / after / mutated（写进文件名，改前改后不能混）。 */
 const TAG = arg('tag', 'after')
 /** 插件页里本插件的包名（详情页 code[data-plugin-name] 里那个）。 */
-const OUR_PACKAGE = arg('package', 'dsh-plugin-manager-companion')
+const OUR_PACKAGE = arg('package', 'dsh-plugin-manager-companion-cmaple')
 const BASE = 'http://127.0.0.1:' + String(PORT) + '/?token=' + TOKEN
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 mkdirSync(OUT, { recursive: true })

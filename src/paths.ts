@@ -16,7 +16,7 @@ import { homedir } from 'node:os'
 import type { ManifestField } from './types.ts'
 
 /** 本包名（用于行 id、缓存目录、自识别）。 */
-export const OUR_PACKAGE_NAME = 'dsh-plugin-manager-companion'
+export const OUR_PACKAGE_NAME = 'dsh-plugin-manager-companion-cmaple'
 
 /**
  * 官方 DSH 运行时包名（用于按 `name` 字段认包，**不看路径**）。
@@ -28,7 +28,7 @@ export const OUR_PACKAGE_NAME = 'dsh-plugin-manager-companion'
 export const DSH_PACKAGE_NAME = '@deepseek-ai/dsh'
 
 /** 本插件的 Loader 行 id。**绝不用 'plugin-manager'**——官方 base bundle 已占用该 id。 */
-export const OUR_ROW_ID = 'dsh-plugin-manager-companion'
+export const OUR_ROW_ID = 'dsh-plugin-manager-companion-cmaple'
 
 /** 解析 Harness home（DSH_HOME 优先，否则 ~/.dsh）。 */
 export function dshHome(): string {

@@ -106,7 +106,10 @@ after(async () => {
   __setHomeForTests(null)
   __resetKindCacheForTests()
   await rm(fixture, { recursive: true, force: true })
-  await rm(home, { recursive: true, force: true })
+  // 用被测代码自己的 rmRetry 收尾：Windows 上刚写完的缓存目录会被句柄短暂占用，
+  // 裸 rm 偶发 ENOTEMPTY/EPERM（实测过一次：整套用例 45 条全绿，却在 teardown 红）。
+  // 这不是产品缺陷，但会让"测试通过"变成随机事件——所以收尾也要有重试。
+  await rmRetry(home)
 })
 
 describe('slugDirName / safeDirName / normalizeRepoRef', () => {

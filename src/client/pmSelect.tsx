@@ -12,7 +12,7 @@
  */
 
 import { useState } from 'react'
-import { Button, IconChevronDownOutline14, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronDownOutlineRegular, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import css from './pmSelect.module.css'
 
 /** 一个可选项。 */
@@ -70,7 +70,7 @@ export function PmSelect({ value, options, onChange, label, placeholder, disable
           onClick={() => { setOpen(previous => !previous) }}
         >
           <span className={css.value}>{current === undefined ? placeholder : current.label}</span>
-          <IconChevronDownOutline14 className={css.caret} />
+          <IconChevronDownOutlineRegular className={css.caret} />
         </Button>
       )}
     />

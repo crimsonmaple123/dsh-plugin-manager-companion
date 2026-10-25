@@ -163,14 +163,14 @@ try {
   const self = makeEnv('real-self')
   const prepSelf = await up.runOfficialAdd('real-self', 'link:' + REPO, { installAnchor: anchor })
   check('官方 install 把本插件装进环境', prepSelf.exitCode, 0)
-  const selfBefore = factsOf(self, 'dsh-plugin-manager-companion')
+  const selfBefore = factsOf(self, 'dsh-plugin-manager-companion-cmaple')
   check('本插件装上了（版本 0.1.0）', selfBefore.version, '0.1.0')
 
   // 造"新版本"：本仓库的副本 + 改版本号（真实存在、能真装）。
   // 说明（如实）：升级的目标 spec 一律是 name@version（registry 版本）——引擎刻意
   // **不接受**调用方指定"装哪个来源"，因为把 link: 换成 registry 版本会改变来源，
   // 那是另一件事（报告里有 changesSource 标它）。本插件当前**没有发布到 npm**
-  // （npm view dsh-plugin-manager-companion → 404），所以"真的换成新版"这一步在这台机器上
+  // （npm view dsh-plugin-manager-companion-cmaple → 404），所以"真的换成新版"这一步在这台机器上
   // 做不成。这条只验 task-73 证据④要的那件事：**job 本身不会被打断**，
   // 且拿不到版本时引擎如实报失败（不许假成功）。
   const { JobRegistry } = await import(join(REPO, 'dist/rest.js'))
@@ -185,7 +185,7 @@ try {
     upgrade: { installAnchor: anchor, log: (line) => note('[清理日志] ' + line) },
   }
   const started = await handleOp('upgrade', {
-    environment: 'real-self', name: 'dsh-plugin-manager-companion', version: '0.1.99',
+    environment: 'real-self', name: 'dsh-plugin-manager-companion-cmaple', version: '0.1.99',
   }, deps)
   check('自升级首包是 jobId（不是裸结果）', typeof started.value?.jobId, 'string')
   // 轮询到落定（job 是异步的：这里真的等它跑完）。
@@ -196,7 +196,7 @@ try {
   }
   check('自升级 job 落定（没因自身代码被替换而中断）', status.done, true)
   check('job 没报错', status.error, undefined)
-  const selfAfter = factsOf(self, 'dsh-plugin-manager-companion')
+  const selfAfter = factsOf(self, 'dsh-plugin-manager-companion-cmaple')
   const selfOutput = String(status.result?.output ?? '')
   check('结论里写明"下次启动生效"（官方口径）', /下次启动/.test(selfOutput), true)
   check('结论里点明是本插件自身', /本插件自身/.test(selfOutput), true)

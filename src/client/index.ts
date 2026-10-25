@@ -37,13 +37,13 @@ import { createUpgradeRowComponent, type UpgradeRowProps } from './UpgradeRow.ts
 import { NS, en, zh } from './locales.ts'
 import {
   AboutController, ConfigController, EnvironmentsController, HealthController, KindsController,
-  MarketplaceController, SETTINGS_NAMESPACE, TrialController, UpgradeController,
+  MarketplaceController, SETTINGS_ENTRY_ID, TrialController, UpgradeController,
   type ConsoleFace, type MarketplaceConsoleFace, type UpgradeFace, type UpgradeState,
 } from './shared.ts'
 import { registeredNames } from '../upgradeView.ts'
 
 /** 本插件依赖的客户端服务：注册面、字典与 t 座位、配置读写。 */
-export const inject = ['slots', 'locale', 'settingsScope']
+export const inject = ['slots', 'locale', 'configForms']
 
 /** 官方插件页里本插件条目的 id（与官方宿主侧配置页的 id 不冲突）。 */
 const OFFICIAL_ITEM_ID = 'companion'
@@ -56,7 +56,7 @@ const OFFICIAL_ITEM_ID = 'companion'
  * 按 REST-CONTRACT §升级动作的客户端约束是「关于 → 软件升级」那个批量视图的活（另一个任务）。
  * 排除是刻意的，不是漏了。
  */
-const OUR_PACKAGE = 'dsh-plugin-manager-companion'
+const OUR_PACKAGE = 'dsh-plugin-manager-companion-cmaple'
 
 /**
  * 装配客户端：字典 → 三个一级设置入口 → 官方插件页内的注册面。
@@ -70,7 +70,9 @@ export function apply(ctx: ClientContext): void {
   const healthFace = new HealthController().inject()
   const environmentsFace = new EnvironmentsController().inject()
   const configFace = new ConfigController(
-    ctx.settingsScope.bind<CompanionConfig>({ namespace: SETTINGS_NAMESPACE }),
+    // 0.2.1：配置通道是 `configForms`（按 profile 条目 id 取表单），
+    // 旧版的 `ctx.settingsScope.bind({ namespace })` 已不存在。
+    ctx.configForms.get<CompanionConfig>(SETTINGS_ENTRY_ID),
   ).inject()
   const marketplaceFace = new MarketplaceController().inject()
   const kindsFace = new KindsController().inject()

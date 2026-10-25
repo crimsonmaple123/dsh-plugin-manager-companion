@@ -90,17 +90,19 @@ function boot(options = {}) {
       entries: () => [], getVersion: () => 0, subscribe: () => () => {},
     },
     remote: { pluginManager: {}, pluginInventory: {}, $on: () => () => {}, $mount: async () => () => {} },
-    settingsScope: {
-      bind() {
+    // 0.2.1 的客户端配置通道：`ctx.configForms.get(entryId)`（旧 settingsScope 已移除）。
+    configForms: {
+      get() {
         return {
           getSnapshot: () => ({
             status: 'ready', value: options.configValue, base: undefined, user: undefined,
-            revision: 1, writable: true, mode: 'host',
+            revision: 1, writable: true,
           }),
-          subscribe: () => () => {}, mutate: async () => {}, set: async () => {}, unset: async () => {},
+          subscribe: () => () => {}, mutate: async () => true, set: async () => true, unset: async () => true,
         }
       },
-      describe: () => ({ subscribe: () => () => {}, getSnapshot: () => ({ descriptors: [] }) }),
+      describe: () => ({ subscribe: () => () => {}, getSnapshot: () => ({ namespaces: [] }) }),
+      whileServed: () => () => {},
     },
   }
   // ctx.inject 的作用域桩件：与真机同形（声明服务后回调拿到作用域内的 ctx，这里就是同一份）。

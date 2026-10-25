@@ -20,7 +20,7 @@ const originalHome = process.env.DSH_HOME
 process.env.DSH_HOME = home
 
 const { handleOp } = await import('../dist/index.js')
-const { ConfigSchema, DEFAULT_TRIAL_CONFIG, TRIAL_DISCLOSURE, effectiveTrialConfig } = await import('../dist/settings.js')
+const { ConfigSchema, DEFAULT_TRIAL_CONFIG, TRIAL_DISCLOSURE, effectiveTrialConfig, normalizeConfig, resolveConfigValue } = await import('../dist/settings.js')
 
 const CANDIDATE = 'dsh-probe-candidate'
 const ANCHOR = '/anchor/package.json'
@@ -135,6 +135,9 @@ function makeDeps({ ctxName = 'demo-env', manager, trial, config }) {
     configUpdate: async (patch) => { current = { ...current, ...patch }; return current },
     capabilities: () => ({ profileBacked: true, manager: true, inventory: false, environmentName: ctxName, missing: [] }),
     jobs: makeJobs(),
+    // 进程事实注入：这些用例验的是判定逻辑（列出/删除/清理），
+    // 与这台机器能不能读进程表无关（受限环境下 CIM 返回 Access denied）。
+    processFacts: () => ({ runs: new Map(), readable: true }),
     ...trial === undefined ? {} : { trial },
   }
 }
@@ -506,12 +509,17 @@ test('effectiveTrialConfig：缺字段/类型不对/越界一律回落到安全�
 })
 
 test('schema 默认回填：新加的试装字段一个都不缺（不能出现看不见的洞）', () => {
-  const resolved = ConfigSchema({})
+  // 0.2.1：根节点是 `.volatile()`，解析结果是 `Volatile<T>` 引用（有 `.get()`），
+  // 不再是裸对象。取快照必须走官方形态的 `.get()`——`resolveConfigValue` 就是这条口径。
+  const resolved = resolveConfigValue(ConfigSchema({}))
+  assert.notEqual(resolved, undefined, 'volatile 配置必须能取出快照')
   for (const key of Object.keys(DEFAULT_TRIAL_CONFIG)) {
     assert.notEqual(resolved.trial[key], undefined, 'schema 回填后 ' + key + ' 不能是 undefined')
   }
   assert.equal(resolved.trial.maxKept, 0)
   assert.equal(resolved.trial.enabled, false)
+  // 归一入口对裸对象同样成立（Loader 之外的来源：CLI 字面量、测试替身）。
+  assert.equal(normalizeConfig({}).trial.maxKept, 0)
 })
 
 after(() => {

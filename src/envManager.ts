@@ -542,7 +542,10 @@ function windowsProcessLines(): ProcessLines {
       }).split(/\r?\n/),
     }
   } catch (error) {
-    return { lines: [], reason: 'powershell CIM 不可用（' + messageOf(error) + '）：无法读取进程表' }
+    // 原因里**不再套括号、也不再带第二个冒号**：调用方会把整句放进
+    // 「…运行状态未知：进程事实读不到（…）」里，再套一层就是括号套括号，
+    // 再带一个冒号就变成「一句堆三个状态」（DESIGN §12.9 的 H4 实测命中）。
+    return { lines: [], reason: 'powershell CIM 不可用 —— ' + messageOf(error) + '，无法读取进程表' }
   }
 }
 
@@ -623,6 +626,16 @@ export interface CurrentEnvironmentOptions {
   readonly ctx?: Context
   /** 覆盖当前环境判定（测试注入）。 */
   readonly current?: string | null
+  /**
+   * 注入进程事实（测试）。
+   *
+   * 为什么需要它：rename / remove / stop / trialRemove 在动手前都要求"进程事实**可读**"
+   * （未知状态下绝不动磁盘）。而"能不能读进程表"是**平台能力**：受限环境里
+   * `Get-CimInstance Win32_Process` 返回 Access denied、管道 spawn 直接 EPERM。
+   * 没有这个接缝，这些用例只能在"恰好能读进程表"的机器上跑，其余平台要么假绿、
+   * 要么只能删掉——两者都不接受。注入的是与生产路径同形的 `ProcessFacts`。
+   */
+  readonly facts?: ProcessFacts
   /** 覆盖官方能力探测（测试注入）。 */
   readonly capabilities?: OfficialCapabilities
 }
@@ -922,7 +935,7 @@ export async function renameEnvironment(
     return failure('current', current + ' 是当前正在运行的环境，不能重命名')
   }
   // 改名不可逆：不拿 3s 陈旧缓存当依据，用即时读取，并要求事实**可读**。
-  const facts = processFacts({ fresh: true })
+  const facts = options.facts ?? processFacts({ fresh: true })
   if (!facts.readable) {
     return failure('facts-unavailable', from + ' 的运行状态未知：进程事实读不到（'
       + String(facts.reason) + '）。拒绝在未知状态下重命名环境。')
@@ -967,7 +980,7 @@ export async function removeEnvironment(
     return failure('current', name + ' 是当前正在运行的环境，不能删除（要删请先停止本进程）')
   }
   // 删除不可逆：不拿 3s 陈旧缓存当依据，用即时读取，并要求事实**可读**。
-  const facts = processFacts({ fresh: true })
+  const facts = options.facts ?? processFacts({ fresh: true })
   if (!facts.readable) {
     return failure('facts-unavailable', name + ' 的运行状态未知：进程事实读不到（'
       + String(facts.reason) + '）。拒绝在未知状态下删除环境。')
@@ -1036,6 +1049,7 @@ export interface LaunchOutcome {
 
 /** startEnvironment 的选项。 */
 export interface StartEnvironmentOptions {
+  readonly facts?: ProcessFacts
   /** 启动方式；terminal 在当前平台没有可用终端时自动降级为后台。 */
   readonly mode?: 'terminal' | 'background'
   /** 指定端口；省略时从 portStart 起找一个空闲端口。 */
@@ -1082,7 +1096,7 @@ export async function startEnvironment(
   if (problem !== null) return failure('invalid-name', problem)
   const dir = environmentDir(name)
   if (!existsSync(join(dir, 'package.json'))) return failure('not-found', '环境不存在：' + name)
-  const facts = processFacts()
+  const facts = options.facts ?? processFacts()
   // 不可读时**不**假装「没在运行」：照常允许启动（启动不是破坏性操作），但把事实如实带出去。
   const factsNote = facts.readable ? '' : '\n注意：进程表不可读（' + String(facts.reason) + '），本次未做重复实例检查'
   const running = runsForName(facts.runs, name)
@@ -1783,9 +1797,10 @@ export async function stopEnvironment(
   }
   // 缓存先看（Windows 全表扫描可达数秒）；缓存里没有时用即时扫描复核一次，免得把
   // 刚起来的实例判成没起、或把刚停的实例当成还在跑。
-  let factsUpd = processFacts()
+  // 注入的 facts（测试）优先：进程表可读性是平台能力，受限环境下无法真读。
+  let factsUpd = options.facts ?? processFacts()
   let runs = runsForName(factsUpd.runs, name)
-  if (runs.length === 0 && factsUpd.readable) {
+  if (runs.length === 0 && factsUpd.readable && options.facts === undefined) {
     factsUpd = processFacts({ fresh: true })
     runs = runsForName(factsUpd.runs, name)
   }

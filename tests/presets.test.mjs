@@ -64,13 +64,13 @@ beforeEach(async () => {
   // 每个用例独立的预设根与归档根，避免相互污染（归档位置由 cacheRoot 派生，
   // 而 cacheRoot 绑定临时 home，所以这里删掉整个归档目录即可）。
   presetRoot = await mkdtemp(join(home, 'presets-'))
-  await rm(presetArchiveDir(), { recursive: true, force: true })
+  await rm(presetArchiveDir(), { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 after(async () => {
   __setHomeForTests(null)
   __resetKindCacheForTests()
-  await rm(home, { recursive: true, force: true })
+  await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 describe('presetDigest', () => {

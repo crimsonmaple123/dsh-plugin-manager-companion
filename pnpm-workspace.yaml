@@ -2,6 +2,18 @@
 packages:
   - .
 
-# 关掉最小发布年龄门槛：本仓库刻意钉官方预发布版本（0.1.6-alpha.2 这类），
+# 关掉最小发布年龄门槛：本仓库刻意钉官方预发布版本（0.2.1-rc.3 这类），
 # 它们通常发布当天就要被消费。版本是精确钉死的，不是范围解析，保护无意义。
 minimumReleaseAge: 0
+
+# 与官方 profile 一致：peer 依赖由宿主提供，不由安装器自动补装。
+# 不写这一条时 pnpm 会给本仓库装出第二份 @deepseek-ai/cordis 等副本，
+# 类型检查通过、运行时却是两套服务表（实测：cordis 的 Context 判等失败）。
+autoInstallPeers: false
+
+# 与官方 profile 一致（`<profile>/pnpm-workspace.yaml` 也是 hoisted）：
+# 平铺安装。Windows 上 pnpm 默认的 junction 隔离布局下，Node 从
+# `node_modules/@deepseek-ai/<pkg>` 起找依赖会漏掉 `.pnpm/<pkg>/node_modules`
+# 里的传递依赖（实测 `ERR_MODULE_NOT_FOUND: semver`，从 dsh-app-boot 内部导入时）；
+# 平铺后依赖都在 `node_modules/` 根，与 DSH 运行时实际布局一致。
+nodeLinker: hoisted

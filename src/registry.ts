@@ -683,7 +683,7 @@ async function walkSources(
         break
       }
       try {
-        const headers: Record<string, string> = { 'user-agent': 'dsh-plugin-manager-companion' }
+        const headers: Record<string, string> = { 'user-agent': 'dsh-plugin-manager-companion-cmaple' }
         if (source.token) {
           headers['accept'] = 'application/vnd.github.raw'
           if (token !== undefined) headers['authorization'] = `Bearer ${token}`

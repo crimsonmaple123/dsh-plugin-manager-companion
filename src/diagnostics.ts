@@ -54,7 +54,7 @@ import type {
 } from './types.ts'
 
 /** 传给官方装载函数（loadProfileDirectory / loadOptionalPatches）的诊断前缀。 */
-const DIAG_BIN = 'dsh-plugin-manager-companion'
+const DIAG_BIN = 'dsh-plugin-manager-companion-cmaple'
 
 /** 五层的固定顺序：只在"环境级能力缺失废掉全部五层"这种跳过里用得到。 */
 const ALL_LAYERS: readonly DiagnosticLayer[] = ['dependency', 'composition', 'runtime', 'consistency', 'ecosystem']
@@ -997,9 +997,31 @@ function bootBlockerFromError(
   const message = messageOf(error)
   const unresolved = /cannot resolve profile bundle\s+("[^"]+"|'[^']+')/.exec(message)
   const malformed = /profile bundle\s+("[^"]+"|'[^']+')\s+declares no dsh\.bundle/.exec(message)
+  // 0.2.1 新增的第三种：bundle 装得上、但它的 engines.dsh / dsh-* peer 与本运行时不相容。
+  // 官方把这条从"启动失败"改成了"跳过这个 bundle"（同一条消息文本，前缀是 Plugin …）。
+  const incompatible = /Plugin\s+(\S+?)\s+is incompatible with dsh\s+(\S+?):/.exec(message)
   const restarted = '装好（或修好这一项）后重启该环境才会生效。'
   const unsure = '注意：本次解析没有用到安装锚点（拿不到或没给），所以本条只说明"这个 bundles 项装不上"，'
     + '不能据此断言这次启动一定失败——环境可能由别的 dsh 安装提供该包。'
+  if (incompatible !== null) {
+    const key = incompatible[1] ?? ''
+    const runtimeVersion = incompatible[2] ?? ''
+    const name = key.includes('@', 1) ? key.slice(0, key.lastIndexOf('@')) : key
+    return {
+      code: 'incompatible-bundle',
+      severity: 'confirm-fix',
+      title: '组合层跳过了不兼容的 bundle：' + key,
+      subjects: [name, env.name],
+      evidence: [{ kind: 'official', at: 'loadProfileDirectory(env.dir)', note: truncatedNote(message) }],
+      detail: 'dsh.profile.bundles 里的 ' + key + ' 声明的要求与当前 dsh ' + runtimeVersion + ' 不相容：'
+        + '官方会跳过它（不是让整个 profile 起不来），但它带来的行全部不会加载，'
+        + '功能看起来"装上了却不起作用"。'
+        + '处置：换一个与本运行时相容的版本，或从 ' + absoluteManifestPath(env) + ' 的 dsh.profile.bundles 里删掉这一项；'
+        + restarted,
+      operation: '在 ' + absoluteManifestPath(env) + ' 的 dsh.profile.bundles 里换掉或删掉 ' + name + '，然后重启该环境',
+      id: 'incompatible-bundle:' + key,
+    }
+  }
   if (unresolved !== null) {
     const name = stripQuotes(unresolved[1] ?? '')
     return {
@@ -1099,8 +1121,36 @@ async function readComposition(
     const profile = boot.loadProfileDirectory(
       DIAG_BIN, env.dir, installAnchor ?? join(env.dir, 'package.json'), { userLayer: true },
     )
+    // 0.2.1 的行为变化（必须知道，否则启动阻断会整类消失）：
+    // 旧版 `loadProfileDirectory` 遇到解析不到的 bundle 会**抛错**；0.2.1 改成
+    // 跳过并记进 `skippedBundles`（`{ packageName, reason }`），启动照常继续。
+    // 于是"从异常文本里解析根因"这条路再也走不到——阻断事实改从 `skippedBundles` 读，
+    // 但仍然逐条变成一等公民 issue（三要素、可折叠、可复制操作），不能只留一句 skip。
+    const anchorConsultedHere = facts.installRoots !== null && installAnchor !== undefined
+    for (const skipped of profile.skippedBundles) {
+      const blocker = bootBlockerFromError(new Error(skipped.reason), env, anchorConsultedHere)
+      if (blocker !== undefined) bootIssues.push(toBootIssue(blocker))
+    }
+    if (profile.skippedBundles.length > 0) {
+      skips.push({
+        check: 'composition-skipped-bundles',
+        layers: ['composition'],
+        reason: '官方跳过了一些 bundle（0.2.1 起不再像旧版那样抛错），依赖这些 bundle 的行没有进入组合：'
+          + profile.skippedBundles.map(item => item.packageName).join('、')
+          // 原始异常文本照样保留：认不出的跳过原因（例如 patch 读不出来）只有它说得清。
+          + '。原始原因：' + profile.skippedBundles.map(item => item.reason).join(' / '),
+      })
+    }
+    // 0.2.1：一个 bundle 可以声明**多个** patch 文件（`dsh.bundle.patch` 支持数组），
+    // 官方类型因此把 `patchPath` 换成了 `patchPaths`。这里按文件逐条展开——诊断要的是
+    // "每一层来自哪个文件"，把多个文件折成一条会丢掉可核对的证据。
     layers = [
-      ...profile.layers.map(layer => ({ path: layer.patchPath, patches: layer.patches as readonly unknown[] })),
+      ...profile.layers.flatMap(layer => layer.patchPaths.map((path, index) => ({
+        path,
+        // `patches` 是所有文件的解析结果按应用顺序拼接；无法再按文件切分，
+        // 因此只让第一个文件携带行数据，其余文件仍作为"参与了组合"的事实被记录。
+        patches: (index === 0 ? layer.patches : []) as readonly unknown[],
+      }))),
       ...(profile.patches.length > 0
         ? [{ path: profile.patchPath, patches: profile.patches as readonly unknown[] }]
         : []),
@@ -3008,9 +3058,10 @@ function isInside(dir: string, candidate: string): boolean {
  */
 function relativeTo(base: string, file: string): string {
   const rel = relative(base, file)
-  if (rel.length === 0) return file
-  if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) return file
-  return rel
+  if (rel.length === 0) return file.split(sep).join('/')
+  if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) return file.split(sep).join('/')
+  // 分隔符统一成 `/`：证据行（`…:12`）要跨平台长得一样，测试钉住的也是 `/` 形态。
+  return rel.split(sep).join('/')
 }
 
 /** 错误消息。 */

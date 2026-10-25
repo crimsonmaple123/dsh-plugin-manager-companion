@@ -17,7 +17,14 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { childProcessSupport, testWhen } from './platform-support.mjs'
 import { DEFAULT_PROFILE, USAGE, judgeAnalyze, loadAnalyzer, main, parseArgs } from '../dist/cli.js'
+
+/**
+ * 这两条 bin 入口判据要真起子进程 + 真建符号链接；受限环境下两者都可能被拒，
+ * 拿不到能力就如实跳过（理由写在报告里），不删用例、不伪造。
+ */
+const testSpawn = testWhen(it, childProcessSupport())
 
 /** 换行符（夹具文本里用）。 */
 const nl = String.fromCharCode(10)
@@ -265,15 +272,15 @@ describe('cli：analyze 只读逃生口（无宿主、环境起不来也要能�
     await put(join(dir, 'package.json'), JSON.stringify({
       name: 'dsh-profile-' + name,
       private: true,
-      dsh: { profile: { bundles: ['dsh-plugin-manager-companion'] } },
-      dependencies: { 'dsh-plugin-manager-companion': 'link:.' },
+      dsh: { profile: { bundles: ['dsh-plugin-manager-companion-cmaple'] } },
+      dependencies: { 'dsh-plugin-manager-companion-cmaple': 'link:.' },
     }))
     await put(join(dir, 'cordis.patch.yml'), [
       '- insert:',
       '    - id: dup-row',
-      '      name: dsh-plugin-manager-companion',
+      '      name: dsh-plugin-manager-companion-cmaple',
       '    - id: dup-row',
-      '      name: dsh-plugin-manager-companion',
+      '      name: dsh-plugin-manager-companion-cmaple',
     ].join(String.fromCharCode(10)) + String.fromCharCode(10))
     await put(join(dir, 'cordis.yml'), '[]' + String.fromCharCode(10))
     return dir
@@ -467,7 +474,7 @@ describe('cli：文案契约（删掉的教学句 / 分工解释不许回来）'
 })
 
 describe('cli · bin 入口判据（task-106）', () => {
-  it('经 .bin 符号链接调用时必须真的执行（修前是静默退出、退出码 0、零输出）', async () => {
+  testSpawn('经 .bin 符号链接调用时必须真的执行（修前是静默退出、退出码 0、零输出）', async () => {
     // 这条钉的是一个**静默失效**：npm 把 bin 装成 node_modules/.bin/dshpmc 这个符号链接，
     // 旧判据看 argv[1] 是否以 cli.js 结尾 —— 软链形态下不以它结尾，于是 main() 从不执行：
     // 进程退出码 0、没有任何输出。用户敲 dshpmc 会以为命令什么都没做（0.1.0/0.1.1/0.1.2 实测如此）。
@@ -495,11 +502,11 @@ describe('cli · bin 入口判据（task-106）', () => {
     await rm(linkDir, { recursive: true, force: true })
   })
 
-  it('被 import 时不得自动执行 main（bin 入口的另一半约束）', async () => {
+  testSpawn('被 import 时不得自动执行 main（bin 入口的另一半约束）', async () => {
     // 上面那条把该执行时必须执行钉住了；这条钉住反面：库形态 import 不能带副作用。
     // 判据同样落在真实子进程上：import 之后 stdout 必须干净（自动执行会打印 USAGE）。
     const cliPath = fileURLToPath(new URL('../dist/cli.js', import.meta.url))
-    const script = 'await import(' + JSON.stringify(cliPath) + ')'
+    const script = 'await import(' + JSON.stringify(new URL('../dist/cli.js', import.meta.url).href) + ')'
     const run = await new Promise((done) => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })
       let out = ''

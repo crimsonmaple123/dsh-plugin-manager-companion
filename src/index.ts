@@ -15,7 +15,7 @@ import type { Context } from "@deepseek-ai/cordis"
 import { collectAboutFacts } from "./about.ts"
 import { analyzeEnvironment } from "./diagnostics.ts"
 import { DEFAULT_ENVIRONMENT_TEMPLATE, backupDiff, backupExport, backupRestore, cleanupTrialEnvironments, copyPlugins, createEnvironment, environmentFingerprint, environmentTemplates, listEnvironments, listTrialEnvironments, planTrialCleanup, processFacts, removeEnvironment, removeTrialEnvironment, renameEnvironment, repairDependencies, runTrialInstall, scanRuns, startEnvironment, stopEnvironment, trialEnvironmentName } from "./envManager.ts"
-import type { SnapshotDepth, TrialConclusion, TrialInstallOptions, TrialInstallResult } from "./envManager.ts"
+import type { ProcessFacts, SnapshotDepth, TrialConclusion, TrialInstallOptions, TrialInstallResult } from "./envManager.ts"
 import { findOrphanKindDirs, kindDirsOf, loadKindRecords, presetsRoot, pruneGhostRecords, removeKindDir, removeKindRecord, skillsRoot } from "./kinds.ts"
 import { buildInstalledIndex, cachedMarketplace, invalidateInstalledIndex, registryItems } from "./marketplace.ts"
 import { probeOfficialCapabilities, requireManager, type OfficialCapabilities } from "./official.ts"
@@ -28,10 +28,11 @@ import { findPluginMatches } from "./match.ts"
 import { registerGuard } from "./guard.ts"
 import { registerCompanionTools } from "./tools.ts"
 import { BODY_LIMIT_DEFAULT, JobRegistry, ROUTE_PREFIX, isJsonPost, isTrustedRequest, readJsonBody, sendJson, type Envelope } from "./rest.ts"
-import { TRIAL_DISCLOSURE, effectiveTrialConfig, fallbackConfigHandle, registerConfig, type CompanionConfig, type ConfigHandle, type TrialConfig } from "./settings.ts"
+import { TRIAL_DISCLOSURE, effectiveTrialConfig, fallbackConfigHandle, normalizeConfig, registerConfig, type CompanionConfig, type ConfigHandle, type TrialConfig } from "./settings.ts"
 import type { BootVerdictKind, DiagnosticLayer, DiagnosticReport, EnvironmentInfo, EnvironmentResult, GatedInstallResult, GatedInstallTrial, KindListResult, MarketplaceResult, TrialCleanupResult, TrialEnvironmentInfo, TrialEnvironmentReport, TrialPolicyOutcome } from "./types.ts"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { existsSync, lstatSync, readdirSync, readlinkSync } from "node:fs"
+import { linkKindOf } from "./links.ts"
 import { join } from "node:path"
 
 /** 本插件对外的服务名。绝不用 pluginManager —— 那是官方的。 */
@@ -39,6 +40,19 @@ export const SERVICE_NAME = "companion"
 
 /** 插件配置的 schema，供宿主配置界面与校验使用。 */
 export { ConfigSchema } from "./settings.ts"
+
+/**
+ * 插件配置的 schema（0.2.1 的 Loader 契约名）。
+ *
+ * **这个名字不能改**：官方 Loader 在 `registry.plugin()` 里读 `plugin.Config` 作为
+ * 该插件的 standard-schema 校验器，官方 `SettingsForms.schema(entry)` 也从
+ * `entry.fiber.runtime.Config` 取它来投影设置表单。没有这个导出，后果是双重的：
+ *   1. `resolveConfig()` 直接原样返回用户配置（schema 默认值、类型校验全部失效）；
+ *   2. `settings.describe()` 里根本不会出现本插件的条目 → 客户端 `configForms.get(id)`
+ *      永远拿不到表单，设置页看不到任何字段。
+ * 旧版（0.1.6）不需要它：那时配置是 `ctx.settings.register(ns, schema)` 显式注册的。
+ */
+export { ConfigSchema as Config } from "./settings.ts"
 
 /** Loader 行名，等于包名；cordis.patch.yml 必须用同一个 id。 */
 export const name = OUR_PACKAGE_NAME
@@ -165,10 +179,12 @@ function rollbackState(dir: string | null, name: string): { lines: string[]; cle
   const entry = join(dir, 'node_modules', name)
   let leftover = false
   try {
-    const stat = lstatSync(entry)
+    lstatSync(entry)
     leftover = true
     // 路径安装留下的链接：说清"文件还在、且我们不会替你删"，但不把目录名与箭头当句子主体。
-    lines.push(stat.isSymbolicLink()
+    // 0.2.1 起用 linkKindOf：Windows 的 junction 在 lstat 里是普通目录，只判 isSymbolicLink()
+    // 会把桌面版最常见的残留说成"文件"，用户照着删都不知道该删什么。
+    lines.push(linkKindOf(entry) !== undefined
       ? '安装目录里还留着指向本地来源的链接（本次安装的残留），需要时可以手动删除'
       : '安装目录里还留着它的文件（本次安装的残留），需要时可以手动删除')
   } catch {
@@ -571,9 +587,9 @@ async function snapshotMatchesOwner(trialEnvName: string, ownerName: string): Pr
  * @param config - 本插件配置（保留策略从这里读，界面不要自己拼默认值）。
  * @returns 报告。
  */
-async function trialEnvironmentReport(config: CompanionConfig): Promise<TrialEnvironmentReport> {
+async function trialEnvironmentReport(config: CompanionConfig, facts?: ProcessFacts): Promise<TrialEnvironmentReport> {
   const trial = effectiveTrialConfig(config)
-  const listed = listTrialEnvironments()
+  const listed = listTrialEnvironments(facts === undefined ? {} : { facts })
   const plan = planTrialCleanup(listed.candidates, { retainDays: trial.retentionDays })
   const notes: string[] = []
   if (!listed.factsReadable) {
@@ -782,6 +798,14 @@ export interface OpDependencies {
   readonly trial?: TrialRunner
   /** 升级引擎依赖（ctx / 官方运行器 / 试装执行器 / 抓取器 的注入缝）。 */
   readonly upgrade?: UpgradeEngineDeps
+  /**
+   * 进程事实读取器（测试注入）。
+   *
+   * 为什么要有这个缝：试装、清理、删除在动手前都要求进程事实**可读**，而"能不能读进程表"
+   * 是平台能力（受限环境里 CIM 返回 Access denied、管道 spawn 直接 EPERM）。
+   * 注入后这些 op 的**判定逻辑**在任何平台都能被验证，而不是只能在"恰好能读进程表"的机器上跑。
+   */
+  readonly processFacts?: () => ProcessFacts
 }
 
 /** 把试装执行器折成 gatedInstall 的可选参数（没注入就不传）。 */
@@ -996,18 +1020,24 @@ async function dispatch(op: string, body: Record<string, unknown>, deps: OpDepen
 
     case "trialEnvironments":
       // 纯读：列出测试环境 + 清理计划预览 + 现在生效的保留策略。这个 op 不删任何东西。
-      return await trialEnvironmentReport(config)
+      return await trialEnvironmentReport(config, deps.processFacts?.())
 
     case "trialRemove":
       // 删单个测试环境：走引擎的三重纪律（只删 <名>-dpmc / 运行中先拒 / 进程事实不可读就拒）。
-      return await removeTrialEnvironment(requireString(body, "name"), { ctx: deps.ctx })
+      return await removeTrialEnvironment(requireString(body, "name"), {
+        ctx: deps.ctx,
+        ...(deps.processFacts === undefined ? {} : { facts: deps.processFacts() }),
+      })
 
     case "trialCleanup":
       // 一键清理过期（长操作：可能删多个目录，含真实快照的 node_modules）。
       // 与"自动清理"共用引擎的同一个计划与同一个记账（<DSH_HOME>/dpmc-trial-cleanup.log）。
       return asJob(async () => {
         const trial = effectiveTrialConfig(config)
-        const result: TrialCleanupResult = await cleanupTrialEnvironments({ retainDays: trial.retentionDays })
+        const result: TrialCleanupResult = await cleanupTrialEnvironments({
+          retainDays: trial.retentionDays,
+          ...(deps.processFacts === undefined ? {} : { facts: deps.processFacts() }),
+        })
         return result
       })
 
@@ -1168,27 +1198,31 @@ export function registerRoutes(ctx: Context, deps: OpDependencies): (() => void)
 /**
  * 插件装配。
  *
- * 只做"必须有"的事：注册配置命名空间、探测官方能力、装 REST 路由与 agent 工具。
+ * 只做"必须有"的事：绑定配置、探测官方能力、装 REST 路由与 agent 工具。
  * 各能力模块在各自的调用点被用到，不做无意义的预先初始化（诊断与市场都是按需触发）。
  *
  * @param ctx - host 上下文。
+ * @param config - Loader 解析后的配置（0.2.1 的 `ConfigSchema` 是 volatile，这里是引用；
+ *   官方 `loader/volatile-update` 提交新值后同一个引用里就是新值）。
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config?: unknown): void {
   const capabilities = probeOfficialCapabilities(ctx)
   const jobs = new JobRegistry()
 
   // 配置句柄先用只读降级版：settings 服务可能晚于本插件装配（挂载顺序不保证）。
   // 实测踩过 ctx.get("settings") 在 apply 时取不到就**永久降级**——descriptor 里永远
-  // 不出现本命名空间、写入被静默丢弃。改用 ctx.inject 等服务就绪再注册。
-  let config: ConfigHandle = fallbackConfigHandle()
+  // 不出现本插件行、写入被静默丢弃。改用 ctx.inject 等服务就绪再绑定。
+  let handle: ConfigHandle = config === undefined
+    ? fallbackConfigHandle()
+    : { ...fallbackConfigHandle(), current: () => normalizeConfig(config) }
   ctx.inject(['settings'], (settingsCtx: Context) => {
     settingsCtx.effect(() => {
-      config = registerConfig(settingsCtx)
-      return () => { config = fallbackConfigHandle() }
-    }, 'plugin-manager-companion: settings namespace')
+      handle = registerConfig(settingsCtx, config)
+      return () => { handle = fallbackConfigHandle() }
+    }, 'plugin-manager-companion: settings forms')
   })
 
-  runtime = { capabilities, config, jobs }
+  runtime = { capabilities, config: handle, jobs }
 
   // 能力缺失如实记账，不假装健康：诊断页会把这些原因直接呈现给用户。
   for (const reason of capabilities.missing) {
@@ -1197,8 +1231,8 @@ export function apply(ctx: Context): void {
 
   const deps: OpDependencies = {
     ctx,
-    config: () => config.current(),
-    configUpdate: (patch) => config.update(patch),
+    config: () => handle.current(),
+    configUpdate: (patch) => handle.update(patch),
     capabilities: () => probeOfficialCapabilities(ctx),
     jobs,
     // 升级引擎要 ctx 才能拿官方 installAnchor 与试装锚点；其余依赖留空走真实实现。
@@ -1219,7 +1253,7 @@ export function apply(ctx: Context): void {
       const disposers = registerCompanionTools(toolsCtx, {
         market: async ({ refresh }) => {
           const envName = probeOfficialCapabilities(toolsCtx).environmentName ?? ""
-          const marketConfig = config.current().marketplace
+          const marketConfig = handle.current().marketplace
           if (!marketConfig.enabled) return { items: [], generatedAt: new Date().toISOString() }
           const index = await loadRegistryIndex({
             refresh, timeoutMs: marketConfig.timeoutMs,
@@ -1241,7 +1275,7 @@ export function apply(ctx: Context): void {
           (rawCtx ?? toolsCtx) as Context, env ?? analysisTarget(deps), cfg,
         ),
         environment: () => currentEnvironment(deps),
-        config: () => config.current(),
+        config: () => handle.current(),
       })
       const guardDisposer = registerGuard(toolsCtx)
       if (guardDisposer.guard !== null) disposers.push(guardDisposer.guard)

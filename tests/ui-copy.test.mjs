@@ -518,7 +518,7 @@ const PERIOD_APPEND_ALLOWED = [
     file: 'src/index.ts',
     // 行号会随本文件里其它插入而漂移（本次是 about op 的接线）。登记表必须跟着更新，
     // 否则它会静默失效——而失效方向是"放行一条本该被拦的短句"，正是这张表存在的意义。
-    line: 401,
+    line: 417,
     because: '补的是「无法试装：验证启动没有给出判定——它既没挂载成功，也没报挂载失败（原因）」'
       + '这一整段多句说明的收尾（§12.8「两句话的说明」：句号在这里是分隔符）',
   },
@@ -877,7 +877,7 @@ describe('UI 文案标准（DESIGN §12）', () => {
     const realBanner = [
       '安装失败：无法试装（不算通过），回滚失败（not-removable）dsh-probe-block：无法试装：候选（dsh-probe-block）',
       '装进了 node_modules，但**没有进入组合层栈**（dsh.profile.bundles = ["@deepseek-ai/dsh-base",',
-      '"@deepseek-ai/dsh-web-app","dsh-plugin-manager-companion"]）——挂载期不会加载它。原因：它在本轮之前',
+      '"@deepseek-ai/dsh-web-app","dsh-plugin-manager-companion-cmaple"]）——挂载期不会加载它。原因：它在本轮之前',
       '就已经是测试环境的依赖，官方 reconcile 会跳过"既有的"依赖。这不等于通过。package.json：依赖声明仍在，',
       '层栈已不含 dsh-probe-block。node_modules：仍留有 dsh-probe-block 的目录。需要时请手工删除它。',
     ].join('\n')

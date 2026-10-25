@@ -32,7 +32,7 @@ const { renderToStaticMarkup } = require_('react-dom/server')
 
 const NS = 'plugin-manager-companion'
 /** 本插件自己的包名（对账时必须被排除：它自己的页面已被配置面注册占用）。 */
-const OUR_PACKAGE = 'dsh-plugin-manager-companion'
+const OUR_PACKAGE = 'dsh-plugin-manager-companion-cmaple'
 
 // ── ctx 桩件（重点：一个真的会记账的 slots 注册表）─────────────────────────
 
@@ -152,17 +152,19 @@ function boot(options = {}) {
       return () => {}
     },
     remote,
-    settingsScope: {
-      bind() {
+    // 0.2.1 的客户端配置通道：`ctx.configForms.get(entryId)`（旧 settingsScope 已移除）。
+    configForms: {
+      get() {
         return {
           getSnapshot: () => scopeSnapshot,
           subscribe: () => () => {},
-          mutate: async () => {},
-          set: async () => {},
-          unset: async () => {},
+          mutate: async () => true,
+          set: async () => true,
+          unset: async () => true,
         }
       },
-      describe: () => ({ subscribe: () => () => {}, getSnapshot: () => ({ descriptors: [] }) }),
+      describe: () => ({ subscribe: () => () => {}, getSnapshot: () => ({ namespaces: [] }) }),
+      whileServed: () => () => {},
     },
   }
   exported.apply(ctx)

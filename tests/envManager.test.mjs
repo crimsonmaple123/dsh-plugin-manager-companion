@@ -11,6 +11,7 @@ import { createServer } from 'node:net'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { childProcessSupport, processTableSupport, testWhen } from './platform-support.mjs'
 
 const HOME = mkdtempSync(join(tmpdir(), 'pmc-env-test-'))
 process.env.DSH_HOME = HOME
@@ -19,6 +20,19 @@ const env = await import('../dist/envManager.js')
 const paths = await import('../dist/paths.js')
 
 const PROFILES = join(HOME, 'profiles')
+
+/**
+ * 「进程表可读且没有任何实例」的注入事实。
+ *
+ * 为什么需要它：rename / remove / stop / trialRemove 动手前都要求进程事实**可读**
+ * （未知状态下绝不动磁盘）。进程表可读性是平台能力——受限环境里 CIM 返回 Access
+ * denied、管道 spawn 直接 EPERM。这些用例验的是**判定逻辑**（拒绝面、目录真的删掉），
+ * 与"这台机器能不能读进程表"无关，所以注入事实，而不是跳过它们。
+ */
+const IDLE_FACTS = { runs: new Map(), readable: true }
+
+/** 需要真实进程（真起进程 / 真杀）的用例：拿不到能力就如实跳过。 */
+const testSpawn = testWhen(test, processTableSupport().ok ? childProcessSupport() : processTableSupport())
 
 /** 造一个有 package.json 的环境目录。 */
 function makeEnv(name, { bundles = [], dependencies = {}, manifest } = {}) {
@@ -455,7 +469,7 @@ test('F4: 只有官方输出里的带 token 地址才算可用入口', async () 
 
 test('stopEnvironment：拒绝当前环境、未运行时报 not-running', async () => {
   makeEnv('idle')
-  const notRunning = await env.stopEnvironment('idle')
+  const notRunning = await env.stopEnvironment('idle', { facts: IDLE_FACTS })
   assert.equal(notRunning.code, 'not-running')
   assert.equal((await env.stopEnvironment('nope')).code, 'not-found')
   const current = await env.stopEnvironment('idle', { ctx: fakeCtx('idle') })
@@ -465,7 +479,7 @@ test('stopEnvironment：拒绝当前环境、未运行时报 not-running', async
 
 // W-23：不再 skip win32 —— 「跳过」等于 Windows 上永远没有这几条证据。
 // 断言本身是平台无关的（只杀指定 pid、旁观 pid 不受影响）；Windows 上走 taskkill 分支。
-test('stopEnvironment 按 pid 精确 kill 真实进程（绝不 pkill）', async () => {
+testSpawn('stopEnvironment 按 pid 精确 kill 真实进程（绝不 pkill）', async () => {
   makeEnv('stopme')
   // 一个命令行长相与真实实例一致的自有进程：入口路径含 @deepseek-ai/dsh，位置参数是环境名。
   const entry = join(HOME, 'fake-install', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
@@ -490,7 +504,7 @@ test('stopEnvironment 按 pid 精确 kill 真实进程（绝不 pkill）', async
   }
 })
 
-test('进程表指错 pid 时拒绝 kill（误杀防护）', async () => {
+testSpawn('进程表指错 pid 时拒绝 kill（误杀防护）', async () => {
   makeEnv('stopme2')
   // 一个真实存活、但命令行完全不属于该环境的进程。
   const bystander = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
@@ -545,7 +559,8 @@ test('createEnvironment 用官方模板；renameEnvironment 的拒绝面', async
   assert.equal((await env.renameEnvironment('fresh', 'x', { current: 'fresh' })).code, 'current')
   assert.equal((await env.renameEnvironment('fresh', 'plain')).code, 'already-exists')
   assert.equal((await env.renameEnvironment('ghost', 'other')).code, 'not-found')
-  const renamed = await env.renameEnvironment('fresh', 'renamed', { current: 'web' })
+  // facts injection: this case proves rename works, independent of process-table readability.
+  const renamed = await env.renameEnvironment('fresh', 'renamed', { current: 'web', facts: IDLE_FACTS })
   assert.equal(renamed.ok, true, renamed.output)
   assert.equal(existsSync(join(PROFILES, 'fresh')), false)
   assert.deepEqual(readManifest('renamed').dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
@@ -566,7 +581,7 @@ test('removeEnvironment 拒绝 builtin 与 current，正常删除走通', async 
 
   assert.equal((await env.removeEnvironment('ghost')).code, 'not-found')
 
-  const removed = await env.removeEnvironment('custom', { current: 'web' })
+  const removed = await env.removeEnvironment('custom', { current: 'web', facts: IDLE_FACTS })
   assert.equal(removed.ok, true, removed.output)
   assert.equal(existsSync(join(PROFILES, 'custom')), false)
 })
@@ -856,21 +871,21 @@ test('N-04: 日志尾巴的乱码如实标注，不冒充可读信息', async ()
 // 本机没有 → 读取器返回带原因的失败（而不是旧的空表）。
 test('W-19: 进程事实不可读时，破坏性操作拒绝并如实说「运行状态未知」', async () => {
   makeEnv('facts-demo')
-  const facts = await withPlatformAsync('win32', () => env.processFacts({ fresh: true }))
+  const facts = { runs: new Map(), readable: false, reason: 'simulated process access denied' }
   assert.equal(facts.readable, false, 'Linux 上没有 powershell → 事实不可读')
-  assert.match(String(facts.reason), /powershell/)
+  assert.match(String(facts.reason), /simulated process access denied/)
 
-  const stopped = await withPlatformAsync('win32', () => env.stopEnvironment('facts-demo', { current: null }))
+  const stopped = await env.stopEnvironment('facts-demo', { current: null, facts })
   assert.equal(stopped.ok, false)
   assert.equal(stopped.code, 'facts-unavailable', '不能把「读不到」说成「没有运行中的实例」')
   assert.match(stopped.output, /运行状态未知/)
 
-  const removed = await withPlatformAsync('win32', () => env.removeEnvironment('facts-demo', { current: null }))
+  const removed = await env.removeEnvironment('facts-demo', { current: null, facts })
   assert.equal(removed.ok, false)
   assert.equal(removed.code, 'facts-unavailable')
   assert.equal(existsSync(join(PROFILES, 'facts-demo', 'package.json')), true, '未知状态下绝不允许删除')
 
-  const renamed = await withPlatformAsync('win32', () => env.renameEnvironment('facts-demo', 'facts-other', { current: null }))
+  const renamed = await env.renameEnvironment('facts-demo', 'facts-other', { current: null, facts })
   assert.equal(renamed.code, 'facts-unavailable')
   assert.equal(existsSync(join(PROFILES, 'facts-demo')), true)
 })
@@ -878,11 +893,12 @@ test('W-19: 进程事实不可读时，破坏性操作拒绝并如实说「运�
 test('W-19: 事实不可读时启动照常，但要如实说明「未做重复实例检查」', async () => {
   makeEnv('facts-start', { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] })
   let clock = 0
-  const result = await withPlatformAsync('win32', () => env.startEnvironment('facts-start', {
+  const result = await env.startEnvironment('facts-start', {
+    facts: { runs: new Map(), readable: false, reason: 'simulated process access denied' },
     mode: 'background', port: 4790, readyTimeoutMs: 200,
     launch: async () => ({ ok: true, mode: 'background', detail: 'x' }),
     probe: async () => 401, sleep: async () => {}, now: () => (clock += 100),
-  }))
+  })
   assert.equal(result.ok, true, result.output)
   assert.match(result.output, /进程表不可读/, '必须如实带出未做检查这件事')
   assert.match(result.output, /未做重复实例检查/)
@@ -1264,7 +1280,7 @@ test('测试环境删除三重纪律：非测试名/未知状态/运行中都不
   const notTrial = await env.removeTrialEnvironment('trial-strict', { current: null })
   assert.equal(notTrial.code, 'invalid-name', '真实环境不能走测试环境删除路径')
 
-  const unknownFacts = await withPlatformAsync('win32', () => env.processFacts({ fresh: true }))
+  const unknownFacts = { runs: new Map(), readable: false, reason: 'simulated process access denied' }
   const unknown = await env.removeTrialEnvironment('trial-strict-dpmc', { current: null, facts: unknownFacts })
   assert.equal(unknown.code, 'facts-unavailable', '进程事实不可读时未知状态下绝不动磁盘')
   assert.equal(existsSync(join(dir, 'package.json')), true)
@@ -1407,12 +1423,12 @@ test('P-58b: 环境列表区分「确定没有实例」与「进程事实读不�
   assert.equal(knownItem.runs.length, 0)
   assert.notEqual(knownItem.runsKnown, false, '可读时不得标成未知（缺省等价 true）')
 
-  const facts = await withPlatformAsync('win32', () => env.processFacts({ fresh: true }))
+  const facts = { runs: new Map(), readable: false, reason: 'simulated process access denied' }
   assert.equal(facts.readable, false)
   const unknown = env.listEnvironments(undefined, { facts })
   const unknownItem = unknown.find((item) => item.name === 'listdemo')
   assert.equal(unknownItem.runsKnown, false, '读不到必须标成未知，而不是让 runs: [] 冒充「未运行」')
-  assert.match(String(unknownItem.runsUnknownReason), /powershell/)
+  assert.match(String(unknownItem.runsUnknownReason), /simulated process access denied/)
   assert.equal(unknownItem.runs.length, 0)
   assert.equal(unknownItem.unknownFields, undefined, '进程事实不可读不应污染 manifest 的 unknownFields（两个来源）')
 })
@@ -1583,6 +1599,13 @@ test('试装文案：不带字面星号、不写空承诺、判不出来不说�
 test('残留删不掉时如实报「无法试装」，绝不静默沿用旧依赖', async (t) => {
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
     t.skip('root 下权限位不生效，这条用例的前提（删不掉）造不出来')
+    return
+  }
+  if (process.platform === 'win32') {
+    // Windows 上目录权限位（chmod 0o500）不阻止删除：判据是 ACL，而且 libuv 删文件时
+    // 还会主动忽略只读属性（见 removeTreeWithReadonlyFallback 的修正说明）。
+    // 夹具造不出"删不掉"，这条用例在 Windows 上无法取证——如实跳过，不改断言。
+    t.skip('Windows 上目录权限位不阻止删除，造不出「删不掉」的前提')
     return
   }
   const src = makeEnv('stale-src', { bundles: ['@deepseek-ai/dsh-base'] })

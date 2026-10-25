@@ -123,7 +123,7 @@ function bootBundleConfig() {
   const exported = bootBundle()
   const { slotRegistrations, dicts } = applyWithMocks(exported, { status: 'ready', value: FULL_CONFIG })
   const reg = slotRegistrations.find(entry =>
-    entry.options.name === 'plugins.bundle.config' && entry.options.key === 'dsh-plugin-manager-companion')
+    entry.options.name === 'plugins.bundle.config' && entry.options.key === 'dsh-plugin-manager-companion-cmaple')
   assert.ok(reg !== undefined, '没找到 plugins.bundle.config 的注册项（key 应为我们的包名）：'
     + slotRegistrations.map(entry => entry.options.name + '/' + String(entry.options.key ?? entry.options.id)).join(','))
   return { reg, face: reg.options.inject(), t: makeT(dicts, { strict: true }) }

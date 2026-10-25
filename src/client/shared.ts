@@ -24,7 +24,7 @@
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { relativeTime, type RelativeTimeUnit, type TagTone } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ComposedProps, EntryKeyOf, SlotMap, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { securityLabelKey, statusLabelKey, typeLabelKey, type MarketLabelKey } from '../marketView.ts'
 import type { OfficialCapabilities } from '../official.ts'
 import type { MarketTagKind } from '../tags.ts'
@@ -46,13 +46,22 @@ import {
 import { canaryVerdict, upgradeOutcome, type UpgradeOutcomeKind } from '../upgradeView.ts'
 
 /**
- * 官方 settings 服务上本插件的命名空间。
+ * 本插件在客户端字典里的命名空间（`ctx.locale.register` 的键）。
  *
  * 与 host 侧 src/settings.ts 的 SETTINGS_NAMESPACE 必须一致；这里刻意不 import 那个
  * 模块的值：它是一个 host 模块（值会拉进 schemastery 与整套 host 代码），客户端只
- * 认这个字符串。改名时必须两处同改（settings.ts 的 schema 注册会拒绝未知命名空间）。
+ * 认这个字符串。
  */
 export const SETTINGS_NAMESPACE = 'plugin-manager-companion'
+
+/**
+ * 本插件的配置条目 id（= Loader 行 id = 包名）。
+ *
+ * 0.2.1 的客户端配置通道是 `ctx.configForms.get(entryId)`，键是 **profile 条目的
+ * id**（官方 `settings.describe()` 的 `ns`），不是字典命名空间。`cordis.patch.yml`
+ * 的行 id 与包名一致，所以这里用包名。两者不是同一个字符串，不要合并。
+ */
+export const SETTINGS_ENTRY_ID = 'dsh-plugin-manager-companion-cmaple'
 
 // ── 自有 REST 契约（docs/REST-CONTRACT.md）───────────────────────────────
 
@@ -216,12 +225,19 @@ const FIX_OP = 'fix'
  * packages/client/ui-plugin-manager/src/client/slot-contract.ts 的
  * PluginConfigViewProps；官方包不在本仓库的安装集里，所以这里按逐字镜像声明）。
  *
+ * 0.2.1 的变化：官方在 `view` 之外多给了一个可选的 `form`（Host 拥有的配置值
+ * 与写动作）。本插件**不使用**它：本插件的配置面要走自己那套带试装/诊断说明的
+ * 表单（`ConfigPanel`），而官方 `form` 只覆盖「字段 + 保存」这一层。字段声明为
+ * 可选即与官方兼容——官方页面传了它，我们不读；不传也不会缺字段。
+ *
  * 漂移风险：官方若改这个契约，必须同步这里——注册面本身是编译期检查的，
  * 运行期由官方页面渲染，类型对不上就是渲染出错的第一个信号。
  */
 export interface PluginConfigViewProps {
   /** summary 只渲染标题下的一句话；page 渲染带自己保存控件的表单。 */
   readonly view: 'summary' | 'page'
+  /** 官方 0.2.1 新增的可选配置表单；本插件不用（见上）。 */
+  readonly form?: unknown
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -1216,14 +1232,18 @@ export class ConfigController {
   private staged: readonly StagedEdit[] = []
 
   /**
-   * @param scope - 官方 settings 服务上本插件命名空间的句柄。
+   * @param form - 官方 `ctx.configForms.get(entryId)` 给本插件条目的表单句柄。
+   *
+   * 0.2.1 的客户端配置通道是 `ConfigForm`（`configForms` 服务）：读的是官方
+   * describe 镜像，写的是 `mutate(ops, revision)`。旧版的 `settingsScope.bind()`
+   * 已随 `SettingsProvider` 一起移除——这里**不**做任何本地注册，只消费官方表单。
    */
-  constructor(private readonly scope: SettingsScope<CompanionConfig>) {
+  constructor(private readonly form: ConfigForm<CompanionConfig>) {
     this.store = createSnapshotStore<ConfigState>({
       status: 'loading', writable: false, value: undefined, draft: undefined, incomplete: false,
       dirty: false, saving: false, failed: false, saved: false,
     })
-    this.scope.subscribe(() => { this.publish() })
+    this.form.subscribe(() => { this.publish() })
     this.publish()
   }
 
@@ -1239,7 +1259,7 @@ export class ConfigController {
 
   /** 把官方快照与本地草稿合成一份状态。 */
   private publish(): void {
-    const snapshot = this.scope.getSnapshot()
+    const snapshot = this.form.getSnapshot()
     const value = snapshot.value
     // 归一在前、草稿在后：官方文档可能残缺（例如宿主只落了用户层），归一补齐默认值后
     // 再叠加用户的暂存编辑，渲染侧因此永远拿到完整字段。写盘仍只写用户改过的路径
@@ -1294,11 +1314,13 @@ export class ConfigController {
     }
     this.store.update((state) => { state.saving = true; state.failed = false })
     try {
-      await this.scope.mutate(ops as unknown as Parameters<SettingsScope<CompanionConfig>['mutate']>[0])
+      // 0.2.1 的 `mutate` 返回 boolean（Host 接受 = true，拒绝 = false，传输失败才 reject）。
+      // 拒绝与失败都必须落到 failed：把 false 当成功会让"改了但没保存"看起来像保存了。
+      const accepted = await this.form.mutate(ops)
       this.staged = []
-      this.store.update((state) => { state.saving = false; state.saved = true })
+      this.store.update((state) => { state.saving = false; state.saved = accepted; state.failed = !accepted })
     } catch {
-      // 官方 scope 自己会回读宿主状态（写失败即 recover），这里只如实标记。
+      // 官方表单自己会回读宿主状态（写失败即 recover），这里只如实标记。
       this.store.update((state) => { state.saving = false; state.failed = true })
     }
     this.publish()
@@ -1592,7 +1614,7 @@ export const SOFTWARE_UNIT_KINDS: readonly string[] = ['installation-provided', 
  * 白名单一过期就会**静默漏掉一个该显示的单元**；作用域是发布方自己定的、稳定的。
  * 与仓库既有判据同源（`src/diagnostics.ts` 的 `name.startsWith('@deepseek-ai/')`）。
  *
- * 注意：本插件自身（`dsh-plugin-manager-companion`）**不在**这个作用域里，
+ * 注意：本插件自身（`dsh-plugin-manager-companion-cmaple`）**不在**这个作用域里，
  * 但它必须显示——所以判据是"官方 或 本插件自身"，见 {@link isSoftwareUnit}。
  *
  * @param name - 包名。

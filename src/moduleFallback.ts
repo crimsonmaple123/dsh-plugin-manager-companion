@@ -34,8 +34,9 @@
  * 传 realpath 才有完整的 463 条。这是本模块最容易静默错的地方，所以单独有测试钉住。
  */
 
-import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, rmdirSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
+import { linkKindOf, linkTargetOf } from './links.ts'
 
 /** 一条兜底链接的分类。 */
 export type ModuleFallbackLinkKind = 'dangling' | 'stale' | 'current'
@@ -123,13 +124,11 @@ export function listModuleFallbackLinks(dir: string): { readonly name: string; r
   }
   for (const entry of entries) {
     const path = join(dir, entry.name)
-    if (entry.isSymbolicLink()) {
-      let target: string | undefined
-      try {
-        target = readlinkSync(path)
-      } catch {
-        // 读不到链接目标：照样报出来，只是没有 target 可显示。
-      }
+    // 0.2.1 修正：Windows 的 junction 在 Dirent / lstat 里都**不是**符号链接，
+    // 只看 `isSymbolicLink()` 会让桌面版整类链接消失（诊断恒 0、清理一条不动）。
+    // `linkKindOf` 同时认符号链接与 junction（判据见 src/links.ts 的表）。
+    if (linkKindOf(path) !== undefined) {
+      const target = linkTargetOf(path)
       out.push({ name: entry.name, path, ...(target === undefined ? {} : { target }) })
       continue
     }
@@ -142,14 +141,9 @@ export function listModuleFallbackLinks(dir: string): { readonly name: string; r
         continue
       }
       for (const child of children) {
-        if (!child.isSymbolicLink()) continue
         const childPath = join(path, child.name)
-        let target: string | undefined
-        try {
-          target = readlinkSync(childPath)
-        } catch {
-          // 同上。
-        }
+        if (linkKindOf(childPath) === undefined) continue
+        const target = linkTargetOf(childPath)
         out.push({ name: entry.name + '/' + child.name, path: childPath, ...(target === undefined ? {} : { target }) })
       }
     }
@@ -187,12 +181,11 @@ export async function readModuleFallbackClosure(
   }
   try {
     const boot = await import('@deepseek-ai/dsh-app-boot')
-    const closure = await boot.healProfilesModuleFallback({
-      installAnchor: resolved,
-      home,
-      materialize: false,
-    })
-    const names = new Set(closure.entries.map(entry => entry.name))
+    // 0.2.1：`healProfilesModuleFallback` 已随旧「链接物化」解析模式一起移除
+    // （官方改为运行期解析表，默认不写盘）。等价只读口径是 `createRuntimeResolution`：
+    // 它算出同一份安装依赖闭包，且明确不写任何模块解析文件。
+    const resolution = await boot.createRuntimeResolution({ installAnchor: resolved, home })
+    const names = new Set(resolution.entries.map(entry => entry.name))
     if (names.size === 0) {
       return { ok: false, reason: '官方闭包算法没有返回任何包（锚点 ' + resolved + ' 可能不是 dsh 安装）' }
     }
@@ -302,7 +295,7 @@ export interface ModuleFallbackCleanup {
 export function cleanupDanglingLinks(
   dir: string,
   scan: ModuleFallbackScan,
-  remove: (path: string) => void,
+  remove: (path: string) => void = path => { unlinkSync(path) },
   removeDir: (path: string) => void = rmdirSync,
 ): ModuleFallbackCleanup {
   const removedLinks: ModuleFallbackLink[] = []
@@ -310,18 +303,20 @@ export function cleanupDanglingLinks(
   const failures: string[] = []
   for (const link of scan.dangling) {
     const path = join(dir, link.name)
-    let stat
-    try {
-      stat = lstatSync(path)
-    } catch (error) {
-      // 已经不在了：这不是失败，是"别人先删了"——如实记跳过。
-      skipReasons.push(link.name + '：删除前已不存在（' + messageOf(error) + '）')
-      continue
-    }
-    // 判据 1：必须是符号链接。真目录/真文件一律不碰（哪怕它看起来该删）。
-    if (!stat.isSymbolicLink()) {
-      skipReasons.push(link.name + '：它不是符号链接（' + (stat.isDirectory() ? '目录' : '文件') + '），不删')
-      continue
+    // 判据 1：必须是链接（符号链接或 Windows junction）。真目录 / 真文件一律不碰
+    // （哪怕它看起来该删）。0.2.1 起 junction 也算链接——否则桌面版一条都清不掉。
+    const kind = linkKindOf(path)
+    if (kind === undefined) {
+      let shape = '不是链接'
+      try {
+        shape = lstatSync(path).isDirectory() ? '目录' : '文件'
+      } catch {
+        // 已经不存在：走下面的"删除前已不存在"分支（由 remove 的失败路径统一记账）。
+      }
+      if (existsSync(path)) {
+        skipReasons.push(link.name + '：它不是链接（' + shape + '），不删')
+        continue
+      }
     }
     // 判据 2：删除前重新确认它仍然是断链。目标被恢复了就不该删。
     if (existsSync(path)) {
@@ -329,7 +324,14 @@ export function cleanupDanglingLinks(
       continue
     }
     try {
-      remove(path)
+      if (kind === undefined) {
+        // 走到这里说明条目已消失：按"别人先删了"记跳过，而不是失败。
+        skipReasons.push(link.name + '：删除前已不存在')
+        continue
+      }
+      // 符号链接用 unlink，junction 用 rmdir（空目录语义，删的是联接本身，不碰目标内容）。
+      if (kind === 'symlink') remove(path)
+      else removeDir(path)
       removedLinks.push({ ...link, path })
     } catch (error) {
       failures.push(link.name + '：删除失败（' + messageOf(error) + '）')

@@ -423,6 +423,7 @@ export const zh = {
   'time.months': '{n} 个月前',
   'time.years': '{n} 年前',
 
+  'trace.commandLine': '命令 {line}',
   'trace.signal': '信号 {signal}',
   'trace.exitCode': '退出码 {exitCode}',
   'trace.noExitCode': '无退出码',
@@ -901,6 +902,7 @@ export const en: Record<CompanionLocaleKey, string> = {
   'time.months': '{n} mo ago',
   'time.years': '{n} y ago',
 
+  'trace.commandLine': 'command {line}',
   'trace.signal': 'signal {signal}',
   'trace.exitCode': 'exit {exitCode}',
   'trace.noExitCode': 'no exit code',

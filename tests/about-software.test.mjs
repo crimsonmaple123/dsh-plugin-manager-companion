@@ -25,7 +25,7 @@ const view = await import('../dist/upgradeView.js')
 const { renderToStaticMarkup } = require_('react-dom/server')
 
 /** 本插件自己的包名（③ 那一类）。 */
-const OUR_PACKAGE = 'dsh-plugin-manager-companion'
+const OUR_PACKAGE = 'dsh-plugin-manager-companion-cmaple'
 
 /** 一条 dist-tag。 */
 const tag = (name, version, line, preferred = false) => ({ tag: name, version, line, preferred })

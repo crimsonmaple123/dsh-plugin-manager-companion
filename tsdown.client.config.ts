@@ -3,16 +3,22 @@ import { basename, dirname, isAbsolute, resolve as resolvePath } from 'node:path
 import { defineConfig } from 'tsdown'
 import { transform } from 'lightningcss'
 
-// 官方 PLATFORM_MODULES 的逐字镜像（deepseek-harness/packages/client/web/src/platform.ts）。
+// 官方 PLATFORM_MODULES 的逐字镜像（deepseek-harness packages/client/web/src/platform.ts）。
 // 表内必须 external：shell 共享唯一冻结实例，内联会产生第二份拷贝并分裂模块身份。
 // 表外必须内联：seed table 答不出的 require 会抛 "missed the module table"，
 // 导致整个客户端启动中断（不只是本插件，所有插件 UI 一起消失）。
 //
-// 官方表在 0.1.6-alpha.2 是 9 项（含 ui-dockkit）。本表必须随 DSH 版本逐字比对；
-// tests/client-boot.test.mjs 会真启动产物来验证越表 require 不会被放过。
+// 0.2.1-rc.3 的官方表是 11 项：在 0.1.6 的 9 项之外新增 `zod` 与
+// `@tanstack/react-virtual`（ui-dockkit 仍在表内）。实测来源：
+// dsh-web-frontend/dist/assets/index-*.js 的 seed 工厂 OZ()，与
+// @deepseek-ai/dsh-client-modules 的 require 解析分支一致。
+// 本表必须随 DSH 版本逐字比对；tests/client-boot.test.mjs 会真启动产物来验证
+// 越表 require 不会被放过。
 const PLATFORM = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client',
   '@deepseek-ai/cordis',
+  'zod',
+  '@tanstack/react-virtual',
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
@@ -20,7 +26,7 @@ const PLATFORM = [
 ]
 
 /** 本包在模块表里的 id（与 package.json 的 name、cordis.patch.yml 的行 id 必须一致）。 */
-const PACKAGE_ID = 'dsh-plugin-manager-companion'
+const PACKAGE_ID = 'dsh-plugin-manager-companion-cmaple'
 
 /**
  * 模块 CSS 的虚拟 id 前缀。
@@ -115,7 +121,7 @@ function cssModulesInline() {
 }
 
 export default defineConfig({
-  name: 'dsh-plugin-manager-companion/client',
+  name: 'dsh-plugin-manager-companion-cmaple/client',
   entry: { client: 'src/client/index.ts' },
   outDir: 'dist',
   format: 'cjs',

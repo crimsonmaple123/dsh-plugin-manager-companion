@@ -17,9 +17,9 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
-  Button, DisclosureRow, IconChevronDownOutline14, IconDownloadOutline16,
-  IconInfoOutline14, IconPlayOutline16, IconPlusOutline16, IconRefreshOutline14, IconShieldOutline16,
-  IconStopFill16, IconWarningOutline16, Input, JsonTree, Menu, Modal, RiskConfirmation,
+  Button, DisclosureRow, IconChevronDownOutlineRegular, IconDownloadOutlineRegular,
+  IconInfoOutlineRegular, IconPlayOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular, IconShieldOutlineRegular,
+  IconStopFillRegular, IconWarningOutlineRegular, Input, JsonTree, Menu, Modal, RiskConfirmation,
   StateDot, Switch, Tag, TerminalBlock, Toast, Tooltip,
   type MenuEntry, type TerminalBlockLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -245,9 +245,9 @@ const MAX_SCOPE_TAGS = 4
 
 /** 处置等级 → 展开图标（可自动修复用盾牌，需确认用警告，只报告用信息）。 */
 const SEVERITY_ICON = {
-  'safe-fix': <IconShieldOutline16 />,
-  'confirm-fix': <IconWarningOutline16 />,
-  'report-only': <IconInfoOutline14 />,
+  'safe-fix': <IconShieldOutlineRegular />,
+  'confirm-fix': <IconWarningOutlineRegular />,
+  'report-only': <IconInfoOutlineRegular />,
 } as const
 
 /** 一条发现的卡片 props（体检页与分组视图共用）。 */
@@ -280,7 +280,7 @@ function IssueRow({
   return (
     <li className={css.issue}>
       <DisclosureRow
-        icon={SEVERITY_ICON[issue.severity] ?? <IconInfoOutline14 />}
+        icon={SEVERITY_ICON[issue.severity] ?? <IconInfoOutlineRegular />}
         title={issue.title}
         open={open}
         expandable
@@ -498,7 +498,7 @@ function HealthPanel({
         <Button
           variant="outline"
           size="sm"
-          icon={<IconRefreshOutline14 />}
+          icon={<IconRefreshOutlineRegular />}
           disabled={running}
           onClick={() => { diagnose() }}
         >
@@ -603,7 +603,7 @@ function HealthPanel({
                 {buckets.map(bucket => (
                   <section key={bucket.group.key} className={css.group}>
                     <DisclosureRow
-                      icon={SEVERITY_ICON[bucket.group.severity] ?? <IconInfoOutline14 />}
+                      icon={SEVERITY_ICON[bucket.group.severity] ?? <IconInfoOutlineRegular />}
                       title={bucket.group.exampleTitle ?? bucket.group.code}
                       open={openGroups.has(bucket.group.key)}
                       expandable
@@ -708,7 +708,7 @@ function RowMenu({ label, items, onSelect }: {
             aria-expanded={open}
             onClick={() => { setOpen(previous => !previous) }}
           >
-            <IconChevronDownOutline14 />
+            <IconChevronDownOutlineRegular />
           </Button>
         </Tooltip>
       )}
@@ -764,6 +764,8 @@ function EnvironmentsPanel({ t, useEnvironments, actions }: EnvironmentsPanelPro
     [environments],
   )
   const terminalLabels: TerminalBlockLabels = {
+    // 0.2.1 新增：溢出的命令行需要一条可访问名（按行号编号）。
+    commandLine: line => t('trace.commandLine', { line }),
     signal: signal => t('trace.signal', { signal }),
     exitCode: code => t('trace.exitCode', { exitCode: code }),
     noExitCode: t('trace.noExitCode'),
@@ -813,7 +815,7 @@ function EnvironmentsPanel({ t, useEnvironments, actions }: EnvironmentsPanelPro
           <Button
             variant="outline"
             size="sm"
-            icon={<IconRefreshOutline14 />}
+            icon={<IconRefreshOutlineRegular />}
             disabled={loading}
             onClick={() => { refresh() }}
           >
@@ -822,7 +824,7 @@ function EnvironmentsPanel({ t, useEnvironments, actions }: EnvironmentsPanelPro
           <Button
             variant="outline"
             size="sm"
-            icon={<IconPlusOutline16 />}
+            icon={<IconPlusOutlineRegular />}
             onClick={() => { openCreate() }}
           >
             {t('env.create')}
@@ -909,7 +911,7 @@ function EnvironmentsPanel({ t, useEnvironments, actions }: EnvironmentsPanelPro
                   <Button
                     variant="outline"
                     size="sm"
-                    icon={<IconStopFill16 />}
+                    icon={<IconStopFillRegular />}
                     disabled={busy !== undefined}
                     onClick={() => { actions.stopEnvironment(environment.name) }}
                   >
@@ -919,7 +921,7 @@ function EnvironmentsPanel({ t, useEnvironments, actions }: EnvironmentsPanelPro
                   <Button
                     variant="outline"
                     size="sm"
-                    icon={<IconPlayOutline16 />}
+                    icon={<IconPlayOutlineRegular />}
                     disabled={busy !== undefined}
                     onClick={() => { actions.startEnvironment(environment.name, false) }}
                   >
@@ -959,7 +961,7 @@ function EnvironmentsPanel({ t, useEnvironments, actions }: EnvironmentsPanelPro
           <Button
             variant="outline"
             size="sm"
-            icon={<IconDownloadOutline16 />}
+            icon={<IconDownloadOutlineRegular />}
             disabled={busy !== undefined || exportTarget === ''}
             onClick={() => { actions.exportBackup(exportTarget) }}
           >

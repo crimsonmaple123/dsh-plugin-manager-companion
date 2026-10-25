@@ -1,9 +1,9 @@
-# dsh-plugin-manager-companion
+# dsh-plugin-manager-companion-cmaple
 
 Companion to the official DSH plugin manager: pre-install quality gate, five-layer environment diagnostics, multi-environment management, and a plugin marketplace.
 
-[![npm version](https://img.shields.io/npm/v/dsh-plugin-manager-companion)](https://www.npmjs.com/package/dsh-plugin-manager-companion)
-[![license](https://img.shields.io/npm/l/dsh-plugin-manager-companion)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/dsh-plugin-manager-companion-cmaple)](https://www.npmjs.com/package/dsh-plugin-manager-companion-cmaple)
+[![license](https://img.shields.io/npm/l/dsh-plugin-manager-companion-cmaple)](LICENSE)
 
 This is a rewrite of [dsh-web-plugin-manager](https://github.com/LX2000WASD/dsh-web-plugin-manager) (0.6.3, unmaintained).
 DSH 0.1.6-alpha.2 ships its own plugin management page, which retired the old approach of shadowing that page and writing profile state directly.
@@ -52,10 +52,12 @@ Verbatim quotes for the four "explicitly out of scope" items, the feature each m
 ## Install
 
 ```sh
-dsh plugin --profile <name> add dsh-plugin-manager-companion@latest
+dsh plugin --profile <name> add dsh-plugin-manager-companion-cmaple@latest
 ```
 
-Requires DSH >= 0.1.6-alpha.2. After installing, enable it on the plugin management page and restart that profile.
+Requires DSH **0.2.1-rc.3** (`engines.dsh = "^0.2.1-rc.3"`; earlier versions are rejected by the
+official compatibility gate). After installing, enable it on the plugin management page and restart
+that profile.
 
 ## Capabilities
 
@@ -123,7 +125,7 @@ All checks run on Linux.
 
 ## Known limitations
 
-- Only DSH >= 0.1.6-alpha.2 is supported; for earlier versions use 0.6.x from the old repository.
+- Only DSH **0.2.1-rc.3** is supported; for earlier versions use 0.6.x from the old repository, or the 0.1.x line of this one.
 - Two fixes that require changing the structure of `cordis.patch.yml` (removing duplicate rows, removing orphan rows) only produce steps for you to apply. This plugin does not write that file.
 - A quality-gate rollback can fail: when the official side refuses to remove a bundle (for example one it protects), the result says what remains and you remove it by hand.
 - The install guard intercepts agent tool calls; it does not intercept commands typed in a terminal.

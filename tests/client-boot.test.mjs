@@ -9,7 +9,7 @@
  * 以及各页面能被服务端渲染（不缺组件、不缺字典键）。
  *
  * 平台表随官方版本变。0.1.6-alpha.2 是 9 项（含 ui-dockkit），必须与
- * dsh-plugin-manager-companion/tsdown.client.config.ts 的 PLATFORM 逐字一致；
+ * dsh-plugin-manager-companion-cmaple/tsdown.client.config.ts 的 PLATFORM 逐字一致；
  * 桩件本身已收敛到 tests/client-harness.mjs（四个客户端测试文件共用一份）。
  */
 import { describe, it } from 'node:test'
